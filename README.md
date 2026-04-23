@@ -5,20 +5,23 @@
 ```bash
 git clone https://github.com/CypherTroopers/cypher-deploy.git
 cd cypher-deploy
-
+ ```
+ ```
 chmod +x setup_cypherium.sh
 ./setup_cypherium.sh
-
+ ```
 ## Check logs
 
 ```bash
 pm2 logs
-
+ ```
 ## start mining (console)
 ```bash
 cd ~/go/src/github.com/cypherium/cypher
+ ```
+ ```
 ./build/bin/cypher attach ipc:./chaindbname/cypher.ipc
-
+ ```
  ```
 personal.newAccount("your password")
  ```
