@@ -147,4 +147,13 @@ chmod +x start-cypher.sh
 /usr/local/bin/pm2 save
 
 echo
+echo "PM2 started cypher-node."
+echo "Check status with:"
+echo "  /usr/local/bin/pm2 status"
+echo "  /usr/local/bin/pm2 logs cypher-node"
+echo
+echo "To enable auto-start after reboot, also run:"
+echo "  /usr/local/bin/pm2 startup systemd -u $USER --hp $HOME"
+
+echo
 echo "Done."
