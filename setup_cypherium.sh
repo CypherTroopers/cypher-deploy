@@ -91,12 +91,10 @@ echo "[7/10] patch dependencies..."
 
 cd "$GOPATH/src/github.com/cypherium/cypher"
 
-# Pin regexp2 into vendor directory
 rm -rf vendor/github.com/dlclark/regexp2
 mkdir -p vendor/github.com/dlclark
 cp -a "$GOPATH/src/github.com/dlclark/regexp2" vendor/github.com/dlclark/
 
-# Safely patch duk_logging.c
 DUK_LOGGING_PATH="$GOPATH/src/github.com/cypherium/cypher/vendor/gopkg.in/olebedev/go-duktape.v3/duk_logging.c"
 
 if [ -f "$DUK_LOGGING_PATH" ]; then
@@ -150,11 +148,3 @@ chmod +x start-cypher.sh
 
 echo
 echo "Done."
-echo "Next commands:"
-echo "  source ~/.bashrc"
-echo "  /usr/local/bin/pm2 logs cypher-node"
-echo "  /usr/local/bin/pm2 status"
-EOF
-
-chmod +x setup_cypherium.sh
-./setup_cypherium.sh
