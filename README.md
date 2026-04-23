@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/YOURNAME/cypher-deploy.git
+git clone https://github.com/CypherTroopers/cypher-deploy.git
 cd cypher-deploy
 
 chmod +x setup_cypherium.sh
