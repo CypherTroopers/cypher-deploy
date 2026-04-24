@@ -387,7 +387,7 @@ Write-Host "Go:"
 go version
 
 Write-Host "MSYS2 gcc:"
-& $Bash -lc "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:$GoBinMsys:`$PATH; which gcc; gcc -dumpmachine"
+& $Bash -lc "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:`$PATH; which gcc; gcc -dumpmachine"
 
 Write-Host "Running:"
 Write-Host ".\build\build_windows.ps1"
