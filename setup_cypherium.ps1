@@ -52,10 +52,10 @@ cd ".\cypher"
 git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 
-if (Test-Path ".\crypto\bls\lib\windows") {
-    Copy-Item ".\crypto\bls\lib\windows\*" ".\crypto\bls\lib\" -Force
+if (Test-Path ".\crypto\bls\lib\win") {
+    Copy-Item ".\crypto\bls\lib\win\*" ".\crypto\bls\lib\" -Force
 } else {
-    Write-Host "WARNING: .\crypto\bls\lib\windows not found. Linux BLS library cannot be used on native Windows."
+    Write-Host "WARNING: .\crypto\bls\lib\win not found. Linux BLS library cannot be used on native Windows."
 }
 
 Write-Host "[5/10] Clone GOPATH dependencies..."
