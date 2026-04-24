@@ -31,6 +31,16 @@ function Add-UserPath {
     Add-PathForCurrentSession $PathToAdd
 }
 
+function Convert-ToMsysPath {
+    param([string]$WinPath)
+
+    $MsysPath = $WinPath -replace '\\', '/'
+    $MsysPath = $MsysPath -replace '^C:', '/c'
+    $MsysPath = $MsysPath -replace '^D:', '/d'
+    $MsysPath = $MsysPath -replace '^E:', '/e'
+    return $MsysPath
+}
+
 function Invoke-Checked {
     param(
         [string]$Command,
@@ -322,6 +332,13 @@ Write-Host "[8/10] build cypher..."
 
 Set-Location $CypherDir
 
+Write-Host "Current directory before make:"
+Get-Location
+
+if (-not (Test-Path ".\Makefile")) {
+    throw "Makefile was not found in current directory. Current directory is: $(Get-Location)"
+}
+
 $env:GO111MODULE = "off"
 $env:GOFLAGS = "-mod=mod"
 $env:CGO_ENABLED = "1"
@@ -331,31 +348,49 @@ $env:CXX = "g++"
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
 
-if (-not (Get-Command make.exe -ErrorAction SilentlyContinue)) {
-    throw "make.exe was not found. MSYS2 make is required. Check C:\msys64\usr\bin is in PATH."
+if (-not (Test-Path $Bash)) {
+    throw "MSYS2 bash was not found at $Bash"
 }
 
-if (-not (Get-Command gcc.exe -ErrorAction SilentlyContinue)) {
-    throw "gcc.exe was not found. MSYS2 mingw64 gcc is required. Check C:\msys64\mingw64\bin is in PATH."
+$CypherDirMsys = Convert-ToMsysPath $CypherDir
+$GoBinMsys = Convert-ToMsysPath $GoBin
+$GoPathMsys = Convert-ToMsysPath $env:GOPATH
+
+Write-Host "MSYS2 cypher path:"
+Write-Host $CypherDirMsys
+
+Write-Host "MSYS2 Go bin path:"
+Write-Host $GoBinMsys
+
+Write-Host "MSYS2 GOPATH:"
+Write-Host $GoPathMsys
+
+$MakeCommand = "export PATH=$GoBinMsys:/mingw64/bin:/usr/bin:`$PATH; export GOPATH=$GoPathMsys; export GO111MODULE=off; export CGO_ENABLED=1; export CC=gcc; export CXX=g++; cd $CypherDirMsys && pwd && ls -la Makefile && make clean && make cypher"
+
+& $Bash -lc $MakeCommand
+
+if ($LASTEXITCODE -ne 0) {
+    throw "MSYS2 bash make cypher failed with exit code $LASTEXITCODE"
 }
 
-make clean
-make cypher
+$CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
+$CypherNoExt = Join-Path $CypherDir "build\bin\cypher"
+
+if ((-not (Test-Path $CypherExe)) -and (-not (Test-Path $CypherNoExt))) {
+    throw "make cypher finished, but no cypher binary was found under build\bin."
+}
 
 Write-Host "[9/10] init chain data..."
 
-$CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
-
-if (-not (Test-Path $CypherExe)) {
-    $CypherExeNoExt = Join-Path $CypherDir "build\bin\cypher"
-    if (Test-Path $CypherExeNoExt) {
-        $CypherExe = $CypherExeNoExt
-    } else {
-        throw "cypher binary was not found under build\bin."
-    }
+if (Test-Path $CypherExe) {
+    $CypherBinary = $CypherExe
+} elseif (Test-Path $CypherNoExt) {
+    $CypherBinary = $CypherNoExt
+} else {
+    throw "cypher binary was not found under build\bin."
 }
 
-& $CypherExe --datadir chaindbname init .\genesistest.json
+& $CypherBinary --datadir chaindbname init .\genesistest.json
 
 Write-Host "[10/10] create start script and register pm2..."
 
