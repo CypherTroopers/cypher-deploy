@@ -4,20 +4,45 @@ Set-StrictMode -Version Latest
 
 Write-Host "[0/10] setup environment..."
 
-$env:GO111MODULE = "off"
-[Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
+function Add-PathForCurrentSession {
+    param([string]$PathToAdd)
 
-$env:GOPATH = Join-Path $HOME "go"
-[Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
+    if ((Test-Path $PathToAdd) -and ($env:PATH -notlike "*$PathToAdd*")) {
+        $env:PATH = "$PathToAdd;$env:PATH"
+    }
+}
 
-$GoInstallRoot = Join-Path $HOME "go-sdk"
-$GoRoot = Join-Path $GoInstallRoot "go1.24.1"
-$GoBin = Join-Path $GoRoot "bin"
+function Add-UserPath {
+    param([string]$PathToAdd)
 
-New-Item -ItemType Directory -Force $GoInstallRoot | Out-Null
-New-Item -ItemType Directory -Force $env:GOPATH | Out-Null
+    if (-not (Test-Path $PathToAdd)) {
+        return
+    }
 
-$env:PATH = "$GoBin;$env:GOPATH\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($null -eq $UserPath) {
+        $UserPath = ""
+    }
+
+    if ($UserPath -notlike "*$PathToAdd*") {
+        [Environment]::SetEnvironmentVariable("Path", "$PathToAdd;$UserPath", "User")
+    }
+
+    Add-PathForCurrentSession $PathToAdd
+}
+
+function Invoke-Checked {
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+
+    & $Command @Arguments
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed: $Command $($Arguments -join ' ')"
+    }
+}
 
 function Ensure-Command {
     param(
@@ -42,21 +67,48 @@ function Winget-Install {
         throw "winget is not available. Please install App Installer from Microsoft Store or install dependencies manually."
     }
 
-    winget install --id $Id -e --accept-package-agreements --accept-source-agreements
+    Write-Host "Installing $Id via winget source only..."
+
+    winget install `
+        --id $Id `
+        -e `
+        --source winget `
+        --accept-package-agreements `
+        --accept-source-agreements
 }
+
+$env:GO111MODULE = "off"
+[Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
+
+$env:GOPATH = Join-Path $HOME "go"
+[Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
+
+$GoInstallRoot = Join-Path $HOME "go-sdk"
+$GoRoot = Join-Path $GoInstallRoot "go1.24.1"
+$GoBin = Join-Path $GoRoot "bin"
+
+New-Item -ItemType Directory -Force $GoInstallRoot | Out-Null
+New-Item -ItemType Directory -Force $env:GOPATH | Out-Null
+
+Add-PathForCurrentSession $GoBin
+Add-PathForCurrentSession "$env:GOPATH\bin"
+Add-PathForCurrentSession "C:\Program Files\Git\cmd"
+Add-PathForCurrentSession "C:\Program Files\nodejs"
+Add-PathForCurrentSession "$env:APPDATA\npm"
+Add-PathForCurrentSession "C:\msys64\mingw64\bin"
+Add-PathForCurrentSession "C:\msys64\usr\bin"
 
 Write-Host "[1/10] install/check Windows dependencies..."
 
 if (-not (Ensure-Command git "Git is not installed. Installing Git...")) {
     Winget-Install "Git.Git"
+    Add-PathForCurrentSession "C:\Program Files\Git\cmd"
 }
 
 if (-not (Ensure-Command node "Node.js is not installed. Installing Node.js...")) {
     Winget-Install "OpenJS.NodeJS.LTS"
-}
-
-if (-not (Ensure-Command npm "npm is not installed. Please restart PowerShell after Node.js install if needed.")) {
-    Write-Host "npm was not found in current PATH. Continuing, but pm2 install may fail until PowerShell is restarted."
+    Add-PathForCurrentSession "C:\Program Files\nodejs"
+    Add-PathForCurrentSession "$env:APPDATA\npm"
 }
 
 if (-not (Test-Path "C:\msys64")) {
@@ -64,7 +116,38 @@ if (-not (Test-Path "C:\msys64")) {
     Winget-Install "MSYS2.MSYS2"
 }
 
-$env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+Add-PathForCurrentSession "C:\Program Files\Git\cmd"
+Add-PathForCurrentSession "C:\Program Files\nodejs"
+Add-PathForCurrentSession "$env:APPDATA\npm"
+Add-PathForCurrentSession "C:\msys64\mingw64\bin"
+Add-PathForCurrentSession "C:\msys64\usr\bin"
+
+Add-UserPath "C:\Program Files\Git\cmd"
+Add-UserPath "C:\Program Files\nodejs"
+Add-UserPath "$env:APPDATA\npm"
+Add-UserPath "C:\msys64\mingw64\bin"
+Add-UserPath "C:\msys64\usr\bin"
+
+if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+    throw "git was installed, but git.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+}
+
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+    throw "Node.js was installed, but node.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+}
+
+if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw "npm was installed, but npm.cmd was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+}
+
+Write-Host "Git:"
+git --version
+
+Write-Host "Node.js:"
+node -v
+
+Write-Host "npm:"
+npm -v
 
 Write-Host "[2/10] install Go 1.24.1..."
 
@@ -88,10 +171,10 @@ if (-not (Test-Path $GoRoot)) {
 $env:GOROOT = $GoRoot
 [Environment]::SetEnvironmentVariable("GOROOT", $GoRoot, "User")
 
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath -notlike "*$GoBin*") {
-    [Environment]::SetEnvironmentVariable("Path", "$GoBin;$env:GOPATH\bin;$UserPath", "User")
-}
+Add-PathForCurrentSession $GoBin
+Add-PathForCurrentSession "$env:GOPATH\bin"
+Add-UserPath $GoBin
+Add-UserPath "$env:GOPATH\bin"
 
 go version
 go env -w GO111MODULE=off
@@ -99,22 +182,28 @@ go env -w GO111MODULE=off
 Write-Host "[3/10] install build dependencies via MSYS2..."
 
 $Bash = "C:\msys64\usr\bin\bash.exe"
+
 if (-not (Test-Path $Bash)) {
-    throw "MSYS2 bash was not found at $Bash. Please restart PowerShell or install MSYS2 manually."
+    throw "MSYS2 bash was not found at $Bash. Please close PowerShell and open it again, then rerun this script."
 }
 
 & $Bash -lc "pacman -Syu --noconfirm"
 & $Bash -lc "pacman -S --needed --noconfirm base-devel git make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
 
+Add-PathForCurrentSession "C:\msys64\mingw64\bin"
+Add-PathForCurrentSession "C:\msys64\usr\bin"
+
 Write-Host "[4/10] install pm2..."
 
-$env:PATH = "$GoBin;$env:GOPATH\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+npm install -g pm2
 
-if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-    throw "npm was not found. Please close and reopen PowerShell, then run this script again."
+Add-PathForCurrentSession "$env:APPDATA\npm"
+
+if (-not (Get-Command pm2.cmd -ErrorAction SilentlyContinue)) {
+    throw "pm2 was installed, but pm2.cmd was not found in PATH. Please close PowerShell and open it again, then rerun this script."
 }
 
-npm install -g pm2
+pm2 -v
 
 Write-Host "[5/10] clone cypher repo..."
 
@@ -132,7 +221,6 @@ Set-Location $CypherDir
 git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 
-# Windows BLS library path is "win", not "windows"
 $WinBlsLib = Join-Path $CypherDir "crypto\bls\lib\win"
 $LinuxBlsLib = Join-Path $CypherDir "crypto\bls\lib\linux"
 $BlsTarget = Join-Path $CypherDir "crypto\bls\lib"
@@ -149,7 +237,7 @@ $WinBlsLib
 Found Linux BLS library:
 $LinuxBlsLib
 
-But Linux .so files cannot be used for Windows native build.
+Linux .so files cannot be used for Windows native build.
 Please prepare crypto\bls\lib\win files, or use WSL Ubuntu/Linux instead.
 "@
 } else {
@@ -223,9 +311,9 @@ $DukLoggingPath = Join-Path $CypherDir "vendor\gopkg.in\olebedev\go-duktape.v3\d
 if (Test-Path $DukLoggingPath) {
     $Content = Get-Content -Raw $DukLoggingPath
 
-    $Content = $Content -replace 'duk_uint8_t date_buf\[32\]', 'duk_uint8_t date_buf[64]'
-    $Content = $Content -replace 'snprintf\(\(char \*\) date_buf, sizeof\(date_buf\),, ', 'snprintf((char *) date_buf, sizeof(date_buf), '
-    $Content = $Content -replace 'sprintf\(\(char \*\) date_buf, "([^"]*)"', 'snprintf((char *) date_buf, sizeof(date_buf), "$1"'
+    $Content = $Content -replace 'duk_uint8_t date_buf$begin:math:display$32$end:math:display$', 'duk_uint8_t date_buf[64]'
+    $Content = $Content -replace 'snprintf$begin:math:text$\\\(char \\\*$end:math:text$ date_buf, sizeof$begin:math:text$date\_buf$end:math:text$,, ', 'snprintf((char *) date_buf, sizeof(date_buf), '
+    $Content = $Content -replace 'sprintf$begin:math:text$\\\(char \\\*$end:math:text$ date_buf, "([^"]*)"', 'snprintf((char *) date_buf, sizeof(date_buf), "$1"'
 
     Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
@@ -238,9 +326,17 @@ $env:GO111MODULE = "off"
 $env:GOFLAGS = "-mod=mod"
 $env:CGO_ENABLED = "1"
 $env:CC = "gcc"
+$env:CXX = "g++"
+
+Add-PathForCurrentSession "C:\msys64\mingw64\bin"
+Add-PathForCurrentSession "C:\msys64\usr\bin"
 
 if (-not (Get-Command make.exe -ErrorAction SilentlyContinue)) {
     throw "make.exe was not found. MSYS2 make is required. Check C:\msys64\usr\bin is in PATH."
+}
+
+if (-not (Get-Command gcc.exe -ErrorAction SilentlyContinue)) {
+    throw "gcc.exe was not found. MSYS2 mingw64 gcc is required. Check C:\msys64\mingw64\bin is in PATH."
 }
 
 make clean
@@ -303,7 +399,7 @@ if (-not $ExtIp) {
   console
 '@ | Set-Content -Encoding UTF8 $StartScript
 
-pm2 delete cypher-node 2>$null
+cmd /c "pm2 delete cypher-node 2>nul"
 pm2 start powershell.exe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File "$StartScript"
 pm2 save
 
