@@ -226,7 +226,7 @@ if (-not (Test-Path $Bash)) {
 }
 
 & $Bash -lc "pacman -Syu --noconfirm"
-& $Bash -lc "pacman -S --needed --noconfirm base-devel git make autoconf automake libtool mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
+& $Bash -lc "pacman -S --needed --noconfirm base-devel git make autoconf automake libtool python mingw-w64-x86_64-python mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
 
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
@@ -295,6 +295,10 @@ gcc -dumpmachine
 echo "g++:"
 which g++
 g++ -dumpmachine
+
+echo "python:"
+which python
+python --version
 
 echo "Clean build directory..."
 rm -rf /tmp/cypher-bls-build
