@@ -6,10 +6,16 @@
 git clone https://github.com/CypherTroopers/cypher-deploy.git
 cd cypher-deploy
  ```
+linux
  ```
 chmod +x setup_cypherium.sh
 ./setup_cypherium.sh
  ```
+powershell
+ ```
+powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1
+ ```
+
 ## Check logs
 
 ```bash
