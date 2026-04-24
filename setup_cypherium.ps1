@@ -88,26 +88,13 @@ function Clone-IfMissing {
     if (-not (Test-Path $Path)) {
         $Parent = Split-Path -Parent $Path
         New-Item -ItemType Directory -Force $Parent | Out-Null
+
         git clone $Url $Path
 
         if ($LASTEXITCODE -ne 0) {
             throw "git clone failed: $Url"
         }
     }
-}
-
-function Convert-ToMsysPath {
-    param([string]$WinPath)
-
-    $Full = [System.IO.Path]::GetFullPath($WinPath)
-
-    if ($Full -match '^([A-Za-z]):\\(.*)$') {
-        $Drive = $matches[1].ToLowerInvariant()
-        $Tail = $matches[2] -replace '\\', '/'
-        return "/$Drive/$Tail"
-    }
-
-    throw "Cannot convert path to MSYS path: $WinPath"
 }
 
 $env:GOPATH = Join-Path $HOME "go"
@@ -337,82 +324,32 @@ if (Test-Path $DukLoggingPath) {
 $BuildWindowsScript = Join-Path $CypherDir "build\build_windows.ps1"
 New-Item -ItemType Directory -Force (Join-Path $CypherDir "build") | Out-Null
 
-@'
+$BuildWindowsContent = @'
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$bashExe = "C:\msys64\usr\bin\bash.exe"
 $mingwBin = "C:\msys64\mingw64\bin"
 $binDir = Join-Path $repoRoot "build\bin"
-$herumiRoot = Join-Path $repoRoot "build\herumi-bls"
-
-function Convert-ToMsysPath {
-    param([string]$WinPath)
-
-    $Full = [System.IO.Path]::GetFullPath($WinPath)
-
-    if ($Full -match '^([A-Za-z]):\\(.*)$') {
-        $Drive = $matches[1].ToLowerInvariant()
-        $Tail = $matches[2] -replace '\\', '/'
-        return "/$Drive/$Tail"
-    }
-
-    throw "Cannot convert path: $WinPath"
-}
-
-function Invoke-BashChecked {
-    param([string]$Script)
-
-    & $bashExe -lc $Script
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "bash command failed with exit code $LASTEXITCODE"
-    }
-}
 
 New-Item -ItemType Directory -Force $binDir | Out-Null
 
-if (-not (Test-Path "$herumiRoot\.git")) {
-    git clone --recursive https://github.com/herumi/bls.git $herumiRoot
+Write-Host "==> restore repository Windows BLS/MCL libs"
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "git clone herumi/bls failed"
-    }
+Set-Location $repoRoot
+
+if (Test-Path ".\crypto\bls\lib\win") {
+    git checkout -- .\crypto\bls\lib\win 2>$null
+
+    Remove-Item -Force ".\crypto\bls\lib\*.a" -ErrorAction SilentlyContinue
+    Copy-Item ".\crypto\bls\lib\win\*.a" ".\crypto\bls\lib\" -Force
+} else {
+    throw "crypto\bls\lib\win was not found."
 }
 
-$herumiMsys = Convert-ToMsysPath $herumiRoot
+Write-Host "==> current BLS/MCL libs"
 
-Write-Host "==> build mcl"
-
-$mclBuild = @'
-export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:$PATH
-cd __HERUMI_MSYS__/mcl
-make clean || true
-make -j4 OS=mingw64 lib/libmcl.a MCL_FP_BIT=256 MCL_FR_BIT=256
-'@
-
-$mclBuild = $mclBuild.Replace("__HERUMI_MSYS__", $herumiMsys)
-Invoke-BashChecked $mclBuild
-
-Write-Host "==> build bls"
-
-$blsBuild = @'
-export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:$PATH
-cd __HERUMI_MSYS__
-make -j4 MCL_FP_BIT=256 MCL_FR_BIT=256 lib/libbls256.a
-'@
-
-$blsBuild = $blsBuild.Replace("__HERUMI_MSYS__", $herumiMsys)
-Invoke-BashChecked $blsBuild
-
-Write-Host "==> copy BLS/MCL libs"
-
-Copy-Item "$herumiRoot\lib\libbls256.a" "$repoRoot\crypto\bls\lib\win\" -Force
-Copy-Item "$herumiRoot\mcl\lib\libmcl.a" "$repoRoot\crypto\bls\lib\win\" -Force
-Copy-Item "$repoRoot\crypto\bls\lib\win\*.a" "$repoRoot\crypto\bls\lib\" -Force
+Get-ChildItem ".\crypto\bls\lib\*.a" | Format-Table -AutoSize
 
 Write-Host "==> build cypher.exe"
 
@@ -425,8 +362,6 @@ $env:CGO_LDFLAGS_ALLOW = ".*"
 $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_CXXFLAGS_ALLOW = ".*"
 $env:PATH = "$mingwBin;$env:PATH"
-
-Set-Location $repoRoot
 
 Remove-Item -Force ".\build\bin\cypher.exe" -ErrorAction SilentlyContinue
 
@@ -464,7 +399,9 @@ if (-not (Test-Path $CypherExe)) {
 if ($LASTEXITCODE -ne 0) {
     throw "cypher.exe version failed with exit code $LASTEXITCODE"
 }
-'@ | Set-Content -Encoding UTF8 $BuildWindowsScript
+'@
+
+Set-Content -Path $BuildWindowsScript -Value $BuildWindowsContent -Encoding UTF8
 
 Write-Host "[7/10] build cypher with build_windows.ps1..."
 
@@ -507,7 +444,7 @@ Write-Host "[10/10] create start script and register pm2..."
 
 $StartScript = Join-Path $CypherDir "start-cypher.ps1"
 
-@'
+$StartScriptContent = @'
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
@@ -518,7 +455,13 @@ if (-not (Test-Path $CypherExe)) {
     throw "cypher.exe was not found: $CypherExe"
 }
 
-$ExtIp = (& curl.exe -4 -s ifconfig.io).Trim()
+$ExtIp = ""
+
+try {
+    $ExtIp = (& curl.exe -4 -s ifconfig.io).Trim()
+} catch {
+    $ExtIp = ""
+}
 
 if (-not $ExtIp) {
     $ExtIp = (Invoke-RestMethod -Uri "https://ifconfig.io/ip").Trim()
@@ -549,10 +492,18 @@ if (-not $ExtIp) {
   --gcmode archive `
   --bootnodes "enode://1300eb515ce5ae1167f05cc2123c8ca7100cb86cfefc39d761e26ce19ba14535b233e9fc4c263444cc4c5934058eb9daa9cf7c4f9c40cbff19ee83055284c718@161.97.184.220:6000" `
   console
-'@ | Set-Content -Encoding UTF8 $StartScript
+'@
+
+Set-Content -Path $StartScript -Value $StartScriptContent -Encoding UTF8
 
 cmd /c "pm2 delete cypher-node 2>nul"
+
 pm2 start powershell.exe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File "$StartScript"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "pm2 start failed with exit code $LASTEXITCODE"
+}
+
 pm2 save
 
 Write-Host ""
