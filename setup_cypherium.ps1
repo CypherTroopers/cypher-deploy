@@ -87,6 +87,27 @@ function Winget-Install {
         --accept-source-agreements
 }
 
+function Invoke-MsysBashScript {
+    param(
+        [string]$Script,
+        [string]$Name = "cypher-msys-script"
+    )
+
+    if (-not (Test-Path $Bash)) {
+        throw "MSYS2 bash was not found at $Bash"
+    }
+
+    $TempScript = Join-Path $env:TEMP "$Name.sh"
+
+    Set-Content -Path $TempScript -Value $Script -Encoding ASCII -NoNewline
+
+    & $Bash (Convert-ToMsysPath $TempScript)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "MSYS2 bash script failed: $Name, exit code $LASTEXITCODE"
+    }
+}
+
 $env:GO111MODULE = "off"
 [Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
 
@@ -198,7 +219,7 @@ if (-not (Test-Path $Bash)) {
 }
 
 & $Bash -lc "pacman -Syu --noconfirm"
-& $Bash -lc "pacman -S --needed --noconfirm base-devel git make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
+& $Bash -lc "pacman -S --needed --noconfirm base-devel git make autoconf automake libtool mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
 
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
@@ -234,6 +255,150 @@ git checkout ecdsa_1.1_test_colossus-Xv2test
 $WinBlsLib = Join-Path $CypherDir "crypto\bls\lib\win"
 $LinuxBlsLib = Join-Path $CypherDir "crypto\bls\lib\linux"
 $BlsTarget = Join-Path $CypherDir "crypto\bls\lib"
+
+$CypherDirMsys = Convert-ToMsysPath $CypherDir
+$GoBinMsys = Convert-ToMsysPath $GoBin
+$GoPathMsys = Convert-ToMsysPath $env:GOPATH
+
+Write-Host "[5.1/10] backup existing BLS/MCL win libs..."
+
+if (Test-Path $WinBlsLib) {
+    $BackupName = "win.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    $BackupPath = Join-Path $BlsTarget $BackupName
+    Copy-Item -Path $WinBlsLib -Destination $BackupPath -Recurse -Force
+    Write-Host "Backup created:"
+    Write-Host $BackupPath
+} else {
+    New-Item -ItemType Directory -Force $WinBlsLib | Out-Null
+}
+
+Write-Host "[5.2/10] rebuild BLS/MCL with MSYS2 MinGW64..."
+
+$RebuildBlsScript = @"
+#!/usr/bin/env bash
+set -euo pipefail
+
+export MSYSTEM=MINGW64
+export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:\$PATH
+
+echo "gcc:"
+which gcc
+gcc -dumpmachine
+
+echo "g++:"
+which g++
+g++ -dumpmachine
+
+echo "Clean build directory..."
+rm -rf /tmp/cypher-bls-build
+mkdir -p /tmp/cypher-bls-build
+cd /tmp/cypher-bls-build
+
+echo "Clone herumi/mcl..."
+git clone --recursive https://github.com/herumi/mcl.git
+
+echo "Clone herumi/bls..."
+git clone --recursive https://github.com/herumi/bls.git
+
+echo "Build mcl..."
+cd /tmp/cypher-bls-build/mcl
+make clean || true
+make -j\$(nproc) lib/libmcl.a
+
+echo "Build bls..."
+cd /tmp/cypher-bls-build/bls
+make clean || true
+make -j\$(nproc)
+
+echo "Generated static libraries:"
+find /tmp/cypher-bls-build -type f -name "*.a" -print
+"@
+
+Invoke-MsysBashScript -Script $RebuildBlsScript -Name "cypher-rebuild-bls"
+
+Write-Host "[5.3/10] install rebuilt BLS/MCL libs..."
+
+$InstallBlsScript = @"
+#!/usr/bin/env bash
+set -euo pipefail
+
+export MSYSTEM=MINGW64
+export PATH=/mingw64/bin:/usr/bin:\$PATH
+
+cd "${CypherDirMsys}"
+
+dst="${CypherDirMsys}/crypto/bls/lib/win"
+mkdir -p "\$dst"
+rm -f "\$dst"/*.a
+
+copy_required_lib() {
+  local name="\$1"
+  local found=""
+
+  found="\$(find /tmp/cypher-bls-build -type f -name "\$name" | head -1 || true)"
+
+  if [ -z "\$found" ] || [ ! -f "\$found" ]; then
+    echo "ERROR: required library not found: \$name"
+    echo "Available .a files:"
+    find /tmp/cypher-bls-build -type f -name "*.a" -print || true
+    exit 20
+  fi
+
+  echo "Copy \$found -> \$dst/\$name"
+  cp -f "\$found" "\$dst/\$name"
+}
+
+copy_required_lib "libmcl.a"
+copy_required_lib "libbls256.a"
+copy_required_lib "libbls384.a"
+copy_required_lib "libbls384_256.a"
+copy_required_lib "libbls512.a"
+
+echo "Installed win libs:"
+ls -la "\$dst"
+
+echo "Copy win libs to crypto/bls/lib root..."
+cp -f "\$dst"/*.a "${CypherDirMsys}/crypto/bls/lib/"
+
+echo "Root BLS libs:"
+ls -la "${CypherDirMsys}/crypto/bls/lib/"*.a
+"@
+
+Invoke-MsysBashScript -Script $InstallBlsScript -Name "cypher-install-bls"
+
+Write-Host "[5.4/10] verify rebuilt BLS/MCL libs..."
+
+$VerifyBlsScript = @"
+#!/usr/bin/env bash
+set -euo pipefail
+
+export MSYSTEM=MINGW64
+export PATH=/mingw64/bin:/usr/bin:\$PATH
+
+rm -rf /tmp/blscheck
+mkdir -p /tmp/blscheck
+cd /tmp/blscheck
+
+for a in "${CypherDirMsys}"/crypto/bls/lib/win/*.a; do
+  echo "===== \$a ====="
+  rm -f *.o
+  ar x "\$a"
+  file *.o | head -5
+
+  if file *.o | head -5 | grep -qi "i386\|80386\|32-bit"; then
+    echo "ERROR: 32-bit object detected in \$a"
+    exit 30
+  fi
+
+  if ! file *.o | head -5 | grep -qi "x86-64\|x86_64"; then
+    echo "WARNING: x86-64 object was not clearly detected in \$a"
+  fi
+done
+"@
+
+Invoke-MsysBashScript -Script $VerifyBlsScript -Name "cypher-verify-bls"
+
+Write-Host "[5.5/10] copy Windows BLS library to root lib directory..."
 
 if (Test-Path $WinBlsLib) {
     Copy-Item -Path "$WinBlsLib\*" -Destination $BlsTarget -Force
@@ -365,7 +530,7 @@ Write-Host $GoBinMsys
 Write-Host "MSYS2 GOPATH:"
 Write-Host $GoPathMsys
 
-$MakeCommand = "export PATH=${GoBinMsys}:/mingw64/bin:/usr/bin:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=gcc; export CXX=g++; cd ${CypherDirMsys} && pwd && ls -la Makefile && make clean && make cypher"
+$MakeCommand = "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=/mingw64/bin/gcc; export CXX=/mingw64/bin/g++; cd ${CypherDirMsys} && pwd && which gcc && gcc -dumpmachine && which go && go version && ls -la Makefile && make clean && make cypher"
 
 & $Bash -lc $MakeCommand
 
