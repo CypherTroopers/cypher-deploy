@@ -64,10 +64,10 @@ function Winget-Install {
 
 function Find-GoBin {
     $Candidates = @(
-        "C:\Program Files\Go\bin",
         (Join-Path $HOME "go-sdk\go1.26.2\bin"),
         (Join-Path $HOME "go-sdk\go1.20.14\bin"),
-        (Join-Path $HOME "go-sdk\go1.24.1\bin")
+        (Join-Path $HOME "go-sdk\go1.24.1\bin"),
+        "C:\Program Files\Go\bin"
     )
 
     foreach ($Path in $Candidates) {
@@ -77,6 +77,37 @@ function Find-GoBin {
     }
 
     return $null
+}
+
+function Clone-IfMissing {
+    param(
+        [string]$Path,
+        [string]$Url
+    )
+
+    if (-not (Test-Path $Path)) {
+        $Parent = Split-Path -Parent $Path
+        New-Item -ItemType Directory -Force $Parent | Out-Null
+        git clone $Url $Path
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed: $Url"
+        }
+    }
+}
+
+function Convert-ToMsysPath {
+    param([string]$WinPath)
+
+    $Full = [System.IO.Path]::GetFullPath($WinPath)
+
+    if ($Full -match '^([A-Za-z]):\\(.*)$') {
+        $Drive = $matches[1].ToLowerInvariant()
+        $Tail = $matches[2] -replace '\\', '/'
+        return "/$Drive/$Tail"
+    }
+
+    throw "Cannot convert path to MSYS path: $WinPath"
 }
 
 $env:GOPATH = Join-Path $HOME "go"
@@ -96,6 +127,11 @@ Add-PathForCurrentSession "C:\Program Files\nodejs"
 Add-PathForCurrentSession "$env:APPDATA\npm"
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
+
+$GoBin = Find-GoBin
+if ($null -ne $GoBin) {
+    Add-PathForCurrentSession $GoBin
+}
 
 Write-Host "[1/10] install/check Windows dependencies..."
 
@@ -146,29 +182,24 @@ Add-UserPath "$env:APPDATA\npm"
 Add-UserPath "C:\msys64\mingw64\bin"
 Add-UserPath "C:\msys64\usr\bin"
 
-$GoBin = Find-GoBin
-if ($null -ne $GoBin) {
-    Add-PathForCurrentSession $GoBin
-}
-
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-    throw "git.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "git.exe was not found in PATH."
 }
 
 if (-not (Get-Command go.exe -ErrorAction SilentlyContinue)) {
-    throw "go.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "go.exe was not found in PATH."
 }
 
 if (-not (Get-Command python.exe -ErrorAction SilentlyContinue)) {
-    throw "python.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "python.exe was not found in PATH."
 }
 
 if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
-    throw "node.exe was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "node.exe was not found in PATH."
 }
 
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-    throw "npm.cmd was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "npm.cmd was not found in PATH."
 }
 
 Write-Host "Git:"
@@ -191,10 +222,10 @@ Write-Host "[2/10] install/check MSYS2 packages..."
 $Bash = "C:\msys64\usr\bin\bash.exe"
 
 if (-not (Test-Path $Bash)) {
-    throw "MSYS2 bash was not found at $Bash. Please close PowerShell and open it again, then rerun this script."
+    throw "MSYS2 bash was not found at $Bash."
 }
 
-& $Bash -lc "pacman -Sy --noconfirm make mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp"
+& $Bash -lc "pacman -Sy --noconfirm make git mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp"
 
 if ($LASTEXITCODE -ne 0) {
     throw "MSYS2 package install failed with exit code $LASTEXITCODE"
@@ -208,7 +239,7 @@ Add-PathForCurrentSession "$env:APPDATA\npm"
 Add-UserPath "$env:APPDATA\npm"
 
 if (-not (Get-Command pm2.cmd -ErrorAction SilentlyContinue)) {
-    throw "pm2.cmd was not found in PATH. Please close PowerShell and open it again, then rerun this script."
+    throw "pm2.cmd was not found in PATH."
 }
 
 pm2 -v
@@ -231,35 +262,65 @@ git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 git pull --ff-only
 
-Write-Host "[5/10] confirm Windows build files..."
+Write-Host "[5/10] clone GOPATH dependencies..."
 
-$BuildWindowsScript = Join-Path $CypherDir "build\build_windows.ps1"
-$WindowsBuildMd = Join-Path $CypherDir "WINDOWS_BUILD.md"
+$GopathSrc = Join-Path $env:GOPATH "src"
 
-if (-not (Test-Path $BuildWindowsScript)) {
-    Write-Host "build_windows.ps1 was not found in current branch."
-    Write-Host "Searching file..."
-    Get-ChildItem -Path $CypherDir -Recurse -Filter "build_windows.ps1" -ErrorAction SilentlyContinue | Select-Object FullName
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\VictoriaMetrics\fastcache") `
+    -Url "https://github.com/VictoriaMetrics/fastcache.git"
 
-    throw @"
-build_windows.ps1 was not found.
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\shirou\gopsutil") `
+    -Url "https://github.com/shirou/gopsutil.git"
 
-According to WINDOWS_BUILD.md, this repo should include:
-  build\build_windows.ps1
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\dlclark\regexp2") `
+    -Url "https://github.com/dlclark/regexp2.git"
 
-You are probably on an old checkout or the branch does not contain the Windows build script.
-Please commit/push build\build_windows.ps1 to this branch, or switch to the branch that contains it.
-"@
-}
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\go-sourcemap\sourcemap") `
+    -Url "https://github.com/go-sourcemap/sourcemap.git"
 
-if (Test-Path $WindowsBuildMd) {
-    Write-Host "WINDOWS_BUILD.md found:"
-    Write-Host $WindowsBuildMd
-} else {
-    Write-Host "WARNING: WINDOWS_BUILD.md was not found, but continuing because build_windows.ps1 exists."
-}
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\tklauser\go-sysconf") `
+    -Url "https://github.com/tklauser/go-sysconf.git"
 
-Write-Host "[6/10] patch dependency if needed..."
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\tklauser\numcpus") `
+    -Url "https://github.com/tklauser/numcpus.git"
+
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "golang.org\x\sys") `
+    -Url "https://github.com/golang/sys.git"
+
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\naoina\toml") `
+    -Url "https://github.com/naoina/toml.git"
+
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\naoina\go-stringutil") `
+    -Url "https://github.com/naoina/go-stringutil.git"
+
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "gopkg.in\urfave\cli.v1") `
+    -Url "https://gopkg.in/urfave/cli.v1"
+
+$Regexp2Dir = Join-Path $GopathSrc "github.com\dlclark\regexp2"
+Set-Location $Regexp2Dir
+git fetch --tags
+git checkout v1.1.8
+
+Write-Host "[6/10] patch dependencies and create Windows build script..."
+
+Set-Location $CypherDir
+
+$VendorRegexp2 = Join-Path $CypherDir "vendor\github.com\dlclark\regexp2"
+$VendorDlclark = Join-Path $CypherDir "vendor\github.com\dlclark"
+
+Remove-Item -Recurse -Force $VendorRegexp2 -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $VendorDlclark | Out-Null
+Copy-Item -Path $Regexp2Dir -Destination $VendorDlclark -Recurse -Force
 
 $DukLoggingPath = Join-Path $CypherDir "vendor\gopkg.in\olebedev\go-duktape.v3\duk_logging.c"
 
@@ -273,24 +334,141 @@ if (Test-Path $DukLoggingPath) {
     Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
 
-Write-Host "[7/10] build cypher with build_windows.ps1..."
+$BuildWindowsScript = Join-Path $CypherDir "build\build_windows.ps1"
+New-Item -ItemType Directory -Force (Join-Path $CypherDir "build") | Out-Null
 
-Set-Location $CypherDir
+@'
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$bashExe = "C:\msys64\usr\bin\bash.exe"
+$mingwBin = "C:\msys64\mingw64\bin"
+$binDir = Join-Path $repoRoot "build\bin"
+$herumiRoot = Join-Path $repoRoot "build\herumi-bls"
+
+function Convert-ToMsysPath {
+    param([string]$WinPath)
+
+    $Full = [System.IO.Path]::GetFullPath($WinPath)
+
+    if ($Full -match '^([A-Za-z]):\\(.*)$') {
+        $Drive = $matches[1].ToLowerInvariant()
+        $Tail = $matches[2] -replace '\\', '/'
+        return "/$Drive/$Tail"
+    }
+
+    throw "Cannot convert path: $WinPath"
+}
+
+function Invoke-BashChecked {
+    param([string]$Script)
+
+    & $bashExe -lc $Script
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "bash command failed with exit code $LASTEXITCODE"
+    }
+}
+
+New-Item -ItemType Directory -Force $binDir | Out-Null
+
+if (-not (Test-Path "$herumiRoot\.git")) {
+    git clone --recursive https://github.com/herumi/bls.git $herumiRoot
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "git clone herumi/bls failed"
+    }
+}
+
+$herumiMsys = Convert-ToMsysPath $herumiRoot
+
+Write-Host "==> build mcl"
+
+$mclBuild = @'
+export MSYSTEM=MINGW64
+export PATH=/mingw64/bin:/usr/bin:$PATH
+cd __HERUMI_MSYS__/mcl
+make clean || true
+make -j4 OS=mingw64 lib/libmcl.a MCL_FP_BIT=256 MCL_FR_BIT=256
+'@
+
+$mclBuild = $mclBuild.Replace("__HERUMI_MSYS__", $herumiMsys)
+Invoke-BashChecked $mclBuild
+
+Write-Host "==> build bls"
+
+$blsBuild = @'
+export MSYSTEM=MINGW64
+export PATH=/mingw64/bin:/usr/bin:$PATH
+cd __HERUMI_MSYS__
+make -j4 MCL_FP_BIT=256 MCL_FR_BIT=256 lib/libbls256.a
+'@
+
+$blsBuild = $blsBuild.Replace("__HERUMI_MSYS__", $herumiMsys)
+Invoke-BashChecked $blsBuild
+
+Write-Host "==> copy BLS/MCL libs"
+
+Copy-Item "$herumiRoot\lib\libbls256.a" "$repoRoot\crypto\bls\lib\win\" -Force
+Copy-Item "$herumiRoot\mcl\lib\libmcl.a" "$repoRoot\crypto\bls\lib\win\" -Force
+Copy-Item "$repoRoot\crypto\bls\lib\win\*.a" "$repoRoot\crypto\bls\lib\" -Force
+
+Write-Host "==> build cypher.exe"
+
+$env:GOPATH = "C:\Users\Administrator\go"
 $env:GO111MODULE = "off"
 $env:CGO_ENABLED = "1"
+$env:CC = "$mingwBin\gcc.exe"
+$env:CXX = "$mingwBin\g++.exe"
 $env:CGO_LDFLAGS_ALLOW = ".*"
 $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_CXXFLAGS_ALLOW = ".*"
+$env:PATH = "$mingwBin;$env:PATH"
 
-Add-PathForCurrentSession "C:\msys64\mingw64\bin"
-Add-PathForCurrentSession "C:\msys64\usr\bin"
+Set-Location $repoRoot
 
-Write-Host "Current directory:"
-Get-Location
+Remove-Item -Force ".\build\bin\cypher.exe" -ErrorAction SilentlyContinue
 
-Write-Host "Running:"
-Write-Host "powershell -ExecutionPolicy Bypass -File .\build\build_windows.ps1"
+go build -o ".\build\bin\cypher.exe" ".\cmd\cypher"
+
+if ($LASTEXITCODE -ne 0) {
+    throw "go build failed with exit code $LASTEXITCODE"
+}
+
+Write-Host "==> copy runtime DLLs"
+
+$dlls = @(
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll",
+    "libgmp-10.dll",
+    "libstdc++-6.dll",
+    "libgcc_s_seh-1.dll",
+    "libwinpthread-1.dll"
+)
+
+foreach ($dll in $dlls) {
+    Copy-Item "$mingwBin\$dll" "$binDir\" -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "==> verify"
+
+$CypherExe = Join-Path $repoRoot "build\bin\cypher.exe"
+
+if (-not (Test-Path $CypherExe)) {
+    throw "cypher.exe was not created: $CypherExe"
+}
+
+& $CypherExe version
+
+if ($LASTEXITCODE -ne 0) {
+    throw "cypher.exe version failed with exit code $LASTEXITCODE"
+}
+'@ | Set-Content -Encoding UTF8 $BuildWindowsScript
+
+Write-Host "[7/10] build cypher with build_windows.ps1..."
+
+Set-Location $CypherDir
 
 powershell.exe `
     -NoProfile `
@@ -316,6 +494,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "[9/10] init chain data..."
+
+Set-Location $CypherDir
 
 & $CypherExe --datadir chaindbname init .\genesistest.json
 
