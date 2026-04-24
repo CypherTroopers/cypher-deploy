@@ -311,9 +311,9 @@ $DukLoggingPath = Join-Path $CypherDir "vendor\gopkg.in\olebedev\go-duktape.v3\d
 if (Test-Path $DukLoggingPath) {
     $Content = Get-Content -Raw $DukLoggingPath
 
-    $Content = $Content -replace 'duk_uint8_t date_buf$begin:math:display$32$end:math:display$', 'duk_uint8_t date_buf[64]'
-    $Content = $Content -replace 'snprintf$begin:math:text$\\\(char \\\*$end:math:text$ date_buf, sizeof$begin:math:text$date\_buf$end:math:text$,, ', 'snprintf((char *) date_buf, sizeof(date_buf), '
-    $Content = $Content -replace 'sprintf$begin:math:text$\\\(char \\\*$end:math:text$ date_buf, "([^"]*)"', 'snprintf((char *) date_buf, sizeof(date_buf), "$1"'
+    $Content = $Content.Replace('duk_uint8_t date_buf[32]', 'duk_uint8_t date_buf[64]')
+    $Content = $Content.Replace('snprintf((char *) date_buf, sizeof(date_buf),, ', 'snprintf((char *) date_buf, sizeof(date_buf), ')
+    $Content = $Content.Replace('sprintf((char *) date_buf, ', 'snprintf((char *) date_buf, sizeof(date_buf), ')
 
     Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
