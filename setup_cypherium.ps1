@@ -1,173 +1,310 @@
 # setup_cypherium.ps1
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
-$GoVersion = "1.24.1"
-$GoMsi = "go$GoVersion.windows-amd64.msi"
-$GoUrl = "https://go.dev/dl/$GoMsi"
+Write-Host "[0/10] setup environment..."
 
-$env:GOPATH = "$env:USERPROFILE\go"
 $env:GO111MODULE = "off"
-$env:Path = "C:\Go\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:USERPROFILE\AppData\Roaming\npm;$env:Path"
-
-[Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
 [Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
 
-Write-Host "[1/10] Install Git / Node.js / MSYS2 / Go..."
+$env:GOPATH = Join-Path $HOME "go"
+[Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
 
-winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements
-winget install --id OpenJS.NodeJS.LTS -e --accept-package-agreements --accept-source-agreements
-winget install --id MSYS2.MSYS2 -e --accept-package-agreements --accept-source-agreements
+$GoInstallRoot = Join-Path $HOME "go-sdk"
+$GoRoot = Join-Path $GoInstallRoot "go1.24.1"
+$GoBin = Join-Path $GoRoot "bin"
 
-cd $env:TEMP
-Invoke-WebRequest -Uri $GoUrl -OutFile $GoMsi
-Start-Process msiexec.exe -Wait -ArgumentList "/i `"$GoMsi`" /qn"
+New-Item -ItemType Directory -Force $GoInstallRoot | Out-Null
+New-Item -ItemType Directory -Force $env:GOPATH | Out-Null
 
-$env:Path = "C:\Go\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:USERPROFILE\AppData\Roaming\npm;$env:Path"
+$env:PATH = "$GoBin;$env:GOPATH\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+
+function Ensure-Command {
+    param(
+        [string]$Command,
+        [string]$InstallMessage
+    )
+
+    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+        Write-Host $InstallMessage
+        return $false
+    }
+
+    return $true
+}
+
+function Winget-Install {
+    param(
+        [string]$Id
+    )
+
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+        throw "winget is not available. Please install App Installer from Microsoft Store or install dependencies manually."
+    }
+
+    winget install --id $Id -e --accept-package-agreements --accept-source-agreements
+}
+
+Write-Host "[1/10] install/check Windows dependencies..."
+
+if (-not (Ensure-Command git "Git is not installed. Installing Git...")) {
+    Winget-Install "Git.Git"
+}
+
+if (-not (Ensure-Command node "Node.js is not installed. Installing Node.js...")) {
+    Winget-Install "OpenJS.NodeJS.LTS"
+}
+
+if (-not (Ensure-Command npm "npm is not installed. Please restart PowerShell after Node.js install if needed.")) {
+    Write-Host "npm was not found in current PATH. Continuing, but pm2 install may fail until PowerShell is restarted."
+}
+
+if (-not (Test-Path "C:\msys64")) {
+    Write-Host "MSYS2 is not installed. Installing MSYS2..."
+    Winget-Install "MSYS2.MSYS2"
+}
+
+$env:PATH = "C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+
+Write-Host "[2/10] install Go 1.24.1..."
+
+$GoZip = Join-Path $env:TEMP "go1.24.1.windows-amd64.zip"
+$GoUrl = "https://go.dev/dl/go1.24.1.windows-amd64.zip"
+
+if (-not (Test-Path $GoRoot)) {
+    Write-Host "Downloading Go 1.24.1..."
+    Invoke-WebRequest -Uri $GoUrl -OutFile $GoZip
+
+    $ExtractDir = Join-Path $env:TEMP "go1.24.1-extract"
+    Remove-Item -Recurse -Force $ExtractDir -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $ExtractDir | Out-Null
+
+    Expand-Archive -Path $GoZip -DestinationPath $ExtractDir -Force
+
+    Remove-Item -Recurse -Force $GoRoot -ErrorAction SilentlyContinue
+    Move-Item -Path (Join-Path $ExtractDir "go") -Destination $GoRoot
+}
+
+$env:GOROOT = $GoRoot
+[Environment]::SetEnvironmentVariable("GOROOT", $GoRoot, "User")
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($UserPath -notlike "*$GoBin*") {
+    [Environment]::SetEnvironmentVariable("Path", "$GoBin;$env:GOPATH\bin;$UserPath", "User")
+}
 
 go version
 go env -w GO111MODULE=off
 
-Write-Host "[2/10] Install MSYS2 build tools..."
+Write-Host "[3/10] install build dependencies via MSYS2..."
 
-$bash = "C:\msys64\usr\bin\bash.exe"
+$Bash = "C:\msys64\usr\bin\bash.exe"
+if (-not (Test-Path $Bash)) {
+    throw "MSYS2 bash was not found at $Bash. Please restart PowerShell or install MSYS2 manually."
+}
 
-& $bash -lc "pacman -Sy --noconfirm"
-& $bash -lc "pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp make git curl wget mingw-w64-x86_64-pkg-config"
+& $Bash -lc "pacman -Syu --noconfirm"
+& $Bash -lc "pacman -S --needed --noconfirm base-devel git make mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp mingw-w64-x86_64-pkgconf"
 
-Write-Host "[3/10] Install pm2..."
+Write-Host "[4/10] install pm2..."
+
+$env:PATH = "$GoBin;$env:GOPATH\bin;C:\msys64\mingw64\bin;C:\msys64\usr\bin;$env:PATH"
+
+if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw "npm was not found. Please close and reopen PowerShell, then run this script again."
+}
 
 npm install -g pm2
 
-Write-Host "[4/10] Clone cypher repo..."
+Write-Host "[5/10] clone cypher repo..."
 
-$CypheriumPath = "$env:GOPATH\src\github.com\cypherium"
-New-Item -ItemType Directory -Force -Path $CypheriumPath | Out-Null
-cd $CypheriumPath
+$CypheriumRoot = Join-Path $env:GOPATH "src\github.com\cypherium"
+$CypherDir = Join-Path $CypheriumRoot "cypher"
 
-if (!(Test-Path ".\cypher")) {
+New-Item -ItemType Directory -Force $CypheriumRoot | Out-Null
+Set-Location $CypheriumRoot
+
+if (-not (Test-Path $CypherDir)) {
     git clone https://github.com/CypherTroopers/cypher.git
 }
 
-cd ".\cypher"
+Set-Location $CypherDir
 git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 
-if (Test-Path ".\crypto\bls\lib\win") {
-    Copy-Item ".\crypto\bls\lib\win\*" ".\crypto\bls\lib\" -Force
+# Windows BLS library path is "win", not "windows"
+$WinBlsLib = Join-Path $CypherDir "crypto\bls\lib\win"
+$LinuxBlsLib = Join-Path $CypherDir "crypto\bls\lib\linux"
+$BlsTarget = Join-Path $CypherDir "crypto\bls\lib"
+
+if (Test-Path $WinBlsLib) {
+    Copy-Item -Path "$WinBlsLib\*" -Destination $BlsTarget -Force
+} elseif (Test-Path $LinuxBlsLib) {
+    throw @"
+Windows BLS library was not found.
+
+Expected Windows BLS library:
+$WinBlsLib
+
+Found Linux BLS library:
+$LinuxBlsLib
+
+But Linux .so files cannot be used for Windows native build.
+Please prepare crypto\bls\lib\win files, or use WSL Ubuntu/Linux instead.
+"@
 } else {
-    Write-Host "WARNING: .\crypto\bls\lib\win not found. Linux BLS library cannot be used on native Windows."
+    throw "No BLS library directory found under crypto\bls\lib."
 }
 
-Write-Host "[5/10] Clone GOPATH dependencies..."
+Write-Host "[6/10] clone GOPATH dependencies..."
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\github.com\VictoriaMetrics" | Out-Null
-cd "$env:GOPATH\src\github.com\VictoriaMetrics"
-if (!(Test-Path ".\fastcache")) {
+$FastcacheDir = Join-Path $env:GOPATH "src\github.com\VictoriaMetrics"
+New-Item -ItemType Directory -Force $FastcacheDir | Out-Null
+Set-Location $FastcacheDir
+if (-not (Test-Path "fastcache")) {
     git clone https://github.com/VictoriaMetrics/fastcache.git
 }
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\github.com\shirou" | Out-Null
-cd "$env:GOPATH\src\github.com\shirou"
-if (!(Test-Path ".\gopsutil")) {
+$GopsutilDir = Join-Path $env:GOPATH "src\github.com\shirou"
+New-Item -ItemType Directory -Force $GopsutilDir | Out-Null
+Set-Location $GopsutilDir
+if (-not (Test-Path "gopsutil")) {
     git clone https://github.com/shirou/gopsutil.git
 }
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\github.com\dlclark" | Out-Null
-cd "$env:GOPATH\src\github.com\dlclark"
-if (!(Test-Path ".\regexp2")) {
+$Regexp2Root = Join-Path $env:GOPATH "src\github.com\dlclark"
+$Regexp2Dir = Join-Path $Regexp2Root "regexp2"
+New-Item -ItemType Directory -Force $Regexp2Root | Out-Null
+Set-Location $Regexp2Root
+if (-not (Test-Path $Regexp2Dir)) {
     git clone https://github.com/dlclark/regexp2.git
 }
-
-cd ".\regexp2"
+Set-Location $Regexp2Dir
 git fetch --tags
 git checkout v1.1.8
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\github.com\go-sourcemap" | Out-Null
-cd "$env:GOPATH\src\github.com\go-sourcemap"
-if (!(Test-Path ".\sourcemap")) {
+$SourcemapRoot = Join-Path $env:GOPATH "src\github.com\go-sourcemap"
+New-Item -ItemType Directory -Force $SourcemapRoot | Out-Null
+Set-Location $SourcemapRoot
+if (-not (Test-Path "sourcemap")) {
     git clone https://github.com/go-sourcemap/sourcemap.git
 }
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\github.com\tklauser" | Out-Null
-cd "$env:GOPATH\src\github.com\tklauser"
-if (!(Test-Path ".\go-sysconf")) {
+$TkRoot = Join-Path $env:GOPATH "src\github.com\tklauser"
+New-Item -ItemType Directory -Force $TkRoot | Out-Null
+Set-Location $TkRoot
+if (-not (Test-Path "go-sysconf")) {
     git clone https://github.com/tklauser/go-sysconf.git
 }
-if (!(Test-Path ".\numcpus")) {
+if (-not (Test-Path "numcpus")) {
     git clone https://github.com/tklauser/numcpus.git
 }
 
-New-Item -ItemType Directory -Force -Path "$env:GOPATH\src\golang.org\x" | Out-Null
-cd "$env:GOPATH\src\golang.org\x"
-if (!(Test-Path ".\sys")) {
+$XRoot = Join-Path $env:GOPATH "src\golang.org\x"
+New-Item -ItemType Directory -Force $XRoot | Out-Null
+Set-Location $XRoot
+if (-not (Test-Path "sys")) {
     git clone https://go.googlesource.com/sys
 }
 
-Write-Host "[6/10] Patch dependencies..."
+Write-Host "[7/10] patch dependencies..."
 
-cd "$env:GOPATH\src\github.com\cypherium\cypher"
+Set-Location $CypherDir
 
-Remove-Item -Recurse -Force ".\vendor\github.com\dlclark\regexp2" -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path ".\vendor\github.com\dlclark" | Out-Null
-Copy-Item "$env:GOPATH\src\github.com\dlclark\regexp2" ".\vendor\github.com\dlclark\regexp2" -Recurse -Force
+$VendorRegexp2 = Join-Path $CypherDir "vendor\github.com\dlclark\regexp2"
+$VendorDlclark = Join-Path $CypherDir "vendor\github.com\dlclark"
 
-$DukLoggingPath = "$env:GOPATH\src\github.com\cypherium\cypher\vendor\gopkg.in\olebedev\go-duktape.v3\duk_logging.c"
+Remove-Item -Recurse -Force $VendorRegexp2 -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $VendorDlclark | Out-Null
+Copy-Item -Path $Regexp2Dir -Destination $VendorDlclark -Recurse -Force
+
+$DukLoggingPath = Join-Path $CypherDir "vendor\gopkg.in\olebedev\go-duktape.v3\duk_logging.c"
 
 if (Test-Path $DukLoggingPath) {
-    $content = Get-Content $DukLoggingPath -Raw
-    $content = $content -replace 'duk_uint8_t date_buf\[32\]', 'duk_uint8_t date_buf[64]'
-    $content = $content -replace 'snprintf\(\(char \*\) date_buf, sizeof\(date_buf\),, ', 'snprintf((char *) date_buf, sizeof(date_buf), '
-    Set-Content $DukLoggingPath $content
+    $Content = Get-Content -Raw $DukLoggingPath
+
+    $Content = $Content -replace 'duk_uint8_t date_buf\[32\]', 'duk_uint8_t date_buf[64]'
+    $Content = $Content -replace 'snprintf\(\(char \*\) date_buf, sizeof\(date_buf\),, ', 'snprintf((char *) date_buf, sizeof(date_buf), '
+    $Content = $Content -replace 'sprintf\(\(char \*\) date_buf, "([^"]*)"', 'snprintf((char *) date_buf, sizeof(date_buf), "$1"'
+
+    Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
 
-Write-Host "[7/10] Build cypher..."
+Write-Host "[8/10] build cypher..."
 
-cd "$env:GOPATH\src\github.com\cypherium\cypher"
+Set-Location $CypherDir
 
-go run build/ci.go install ./cmd/cypher
+$env:GO111MODULE = "off"
+$env:GOFLAGS = "-mod=mod"
+$env:CGO_ENABLED = "1"
+$env:CC = "gcc"
 
-Write-Host "[8/10] Init chain data..."
+if (-not (Get-Command make.exe -ErrorAction SilentlyContinue)) {
+    throw "make.exe was not found. MSYS2 make is required. Check C:\msys64\usr\bin is in PATH."
+}
 
-.\build\bin\cypher.exe --datadir chaindbname init .\genesistest.json
+make clean
+make cypher
 
-Write-Host "[9/10] Create start script..."
+Write-Host "[9/10] init chain data..."
 
-$StartScript = @'
+$CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
+
+if (-not (Test-Path $CypherExe)) {
+    $CypherExeNoExt = Join-Path $CypherDir "build\bin\cypher"
+    if (Test-Path $CypherExeNoExt) {
+        $CypherExe = $CypherExeNoExt
+    } else {
+        throw "cypher binary was not found under build\bin."
+    }
+}
+
+& $CypherExe --datadir chaindbname init .\genesistest.json
+
+Write-Host "[10/10] create start script and register pm2..."
+
+$StartScript = Join-Path $CypherDir "start-cypher.ps1"
+
+@'
 $ErrorActionPreference = "Stop"
 
-cd "$PSScriptRoot"
+Set-Location $PSScriptRoot
 
-$ExternalIp = Invoke-RestMethod -Uri "https://ifconfig.io"
+$CypherExe = Join-Path $PSScriptRoot "build\bin\cypher.exe"
+if (-not (Test-Path $CypherExe)) {
+    $CypherExe = Join-Path $PSScriptRoot "build\bin\cypher"
+}
 
-.\build\bin\cypher.exe `
+$ExtIp = (& curl.exe -4 -s ifconfig.io).Trim()
+if (-not $ExtIp) {
+    throw "Failed to get external IPv4 address."
+}
+
+& $CypherExe `
   --verbosity 4 `
   --rnetport 7200 `
   --syncmode full `
-  --nat "extip:$ExternalIp" `
+  --nat "extip:$ExtIp" `
   --ws `
-  --ws.addr 0.0.0.0 `
+  --ws.addr "0.0.0.0" `
   --ws.port 9251 `
   --ws.origins "*" `
   --metrics `
   --http `
-  --http.addr 0.0.0.0 `
+  --http.addr "0.0.0.0" `
   --http.port 8000 `
-  --http.api eth,web3,net,txpool `
+  --http.api "eth,web3,net,txpool" `
   --http.corsdomain "*" `
   --port 6000 `
   --datadir chaindbname `
   --networkid 12367 `
   --gcmode archive `
-  --bootnodes enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800 `
+  --bootnodes "enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800" `
   console
-'@
-
-Set-Content -Path ".\start-cypher.ps1" -Value $StartScript
-
-Write-Host "[10/10] Register pm2..."
+'@ | Set-Content -Encoding UTF8 $StartScript
 
 pm2 delete cypher-node 2>$null
-pm2 start powershell --name cypher-node -- -ExecutionPolicy Bypass -File "$env:GOPATH\src\github.com\cypherium\cypher\start-cypher.ps1"
+pm2 start powershell.exe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File "$StartScript"
 pm2 save
 
 Write-Host ""
