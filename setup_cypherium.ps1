@@ -99,6 +99,7 @@ function Clone-IfMissing {
 
 $env:GOPATH = Join-Path $HOME "go"
 $env:GO111MODULE = "off"
+$env:GOFLAGS = ""
 
 [Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
 [Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
@@ -293,12 +294,20 @@ Clone-IfMissing `
     -Path (Join-Path $GopathSrc "gopkg.in\urfave\cli.v1") `
     -Url "https://gopkg.in/urfave/cli.v1"
 
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\yusufpapurcu\wmi") `
+    -Url "https://github.com/yusufpapurcu/wmi.git"
+
+Clone-IfMissing `
+    -Path (Join-Path $GopathSrc "github.com\go-ole\go-ole") `
+    -Url "https://github.com/go-ole/go-ole.git"
+
 $Regexp2Dir = Join-Path $GopathSrc "github.com\dlclark\regexp2"
 Set-Location $Regexp2Dir
 git fetch --tags
 git checkout v1.1.8
 
-Write-Host "[6/10] patch dependencies and create Windows build script..."
+Write-Host "[6/10] patch dependencies..."
 
 Set-Location $CypherDir
 
@@ -321,49 +330,44 @@ if (Test-Path $DukLoggingPath) {
     Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
 
-$BuildWindowsScript = Join-Path $CypherDir "build\build_windows.ps1"
-New-Item -ItemType Directory -Force (Join-Path $CypherDir "build") | Out-Null
+Write-Host "[7/10] restore BLS/MCL libs and build cypher.exe..."
 
-$BuildWindowsContent = @'
-$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
+Set-Location $CypherDir
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$mingwBin = "C:\msys64\mingw64\bin"
-$binDir = Join-Path $repoRoot "build\bin"
+$BinDir = Join-Path $CypherDir "build\bin"
+$MingwBin = "C:\msys64\mingw64\bin"
 
-New-Item -ItemType Directory -Force $binDir | Out-Null
+New-Item -ItemType Directory -Force $BinDir | Out-Null
 
-Write-Host "==> restore repository Windows BLS/MCL libs"
-
-Set-Location $repoRoot
-
-if (Test-Path ".\crypto\bls\lib\win") {
-    git checkout -- .\crypto\bls\lib\win 2>$null
-
-    Remove-Item -Force ".\crypto\bls\lib\*.a" -ErrorAction SilentlyContinue
-    Copy-Item ".\crypto\bls\lib\win\*.a" ".\crypto\bls\lib\" -Force
-} else {
+if (-not (Test-Path ".\crypto\bls\lib\win")) {
     throw "crypto\bls\lib\win was not found."
 }
 
-Write-Host "==> current BLS/MCL libs"
+git checkout -- .\crypto\bls\lib\win 2>$null
 
+Remove-Item -Force ".\crypto\bls\lib\*.a" -ErrorAction SilentlyContinue
+Copy-Item ".\crypto\bls\lib\win\*.a" ".\crypto\bls\lib\" -Force
+
+Write-Host "Current BLS/MCL libs:"
 Get-ChildItem ".\crypto\bls\lib\*.a" | Format-Table -AutoSize
 
-Write-Host "==> build cypher.exe"
-
-$env:GOPATH = "C:\Users\Administrator\go"
+$env:GOPATH = Join-Path $HOME "go"
 $env:GO111MODULE = "off"
+$env:GOFLAGS = ""
 $env:CGO_ENABLED = "1"
-$env:CC = "$mingwBin\gcc.exe"
-$env:CXX = "$mingwBin\g++.exe"
+$env:CC = Join-Path $MingwBin "gcc.exe"
+$env:CXX = Join-Path $MingwBin "g++.exe"
 $env:CGO_LDFLAGS_ALLOW = ".*"
 $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_CXXFLAGS_ALLOW = ".*"
-$env:PATH = "$mingwBin;$env:PATH"
+$env:PATH = "$MingwBin;$env:PATH"
 
 Remove-Item -Force ".\build\bin\cypher.exe" -ErrorAction SilentlyContinue
+
+Write-Host "go env:"
+go env GOPATH GO111MODULE GOFLAGS CGO_ENABLED CC CXX
+
+Write-Host "Building cypher.exe..."
 
 go build -o ".\build\bin\cypher.exe" ".\cmd\cypher"
 
@@ -371,7 +375,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "go build failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "==> copy runtime DLLs"
+Write-Host "[8/10] copy runtime DLLs and verify cypher.exe..."
 
 $dlls = @(
     "libcrypto-3-x64.dll",
@@ -383,40 +387,13 @@ $dlls = @(
 )
 
 foreach ($dll in $dlls) {
-    Copy-Item "$mingwBin\$dll" "$binDir\" -Force -ErrorAction SilentlyContinue
+    $src = Join-Path $MingwBin $dll
+    if (Test-Path $src) {
+        Copy-Item $src $BinDir -Force
+    } else {
+        Write-Host "WARNING: DLL not found: $src"
+    }
 }
-
-Write-Host "==> verify"
-
-$CypherExe = Join-Path $repoRoot "build\bin\cypher.exe"
-
-if (-not (Test-Path $CypherExe)) {
-    throw "cypher.exe was not created: $CypherExe"
-}
-
-& $CypherExe version
-
-if ($LASTEXITCODE -ne 0) {
-    throw "cypher.exe version failed with exit code $LASTEXITCODE"
-}
-'@
-
-Set-Content -Path $BuildWindowsScript -Value $BuildWindowsContent -Encoding UTF8
-
-Write-Host "[7/10] build cypher with build_windows.ps1..."
-
-Set-Location $CypherDir
-
-powershell.exe `
-    -NoProfile `
-    -ExecutionPolicy Bypass `
-    -File ".\build\build_windows.ps1"
-
-if ($LASTEXITCODE -ne 0) {
-    throw "build_windows.ps1 failed with exit code $LASTEXITCODE"
-}
-
-Write-Host "[8/10] verify cypher.exe version..."
 
 $CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
 
