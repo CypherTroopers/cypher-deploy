@@ -365,7 +365,7 @@ Write-Host $GoBinMsys
 Write-Host "MSYS2 GOPATH:"
 Write-Host $GoPathMsys
 
-$MakeCommand = "export PATH=$GoBinMsys:/mingw64/bin:/usr/bin:`$PATH; export GOPATH=$GoPathMsys; export GO111MODULE=off; export CGO_ENABLED=1; export CC=gcc; export CXX=g++; cd $CypherDirMsys && pwd && ls -la Makefile && make clean && make cypher"
+$MakeCommand = "export PATH=${GoBinMsys}:/mingw64/bin:/usr/bin:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=gcc; export CXX=g++; cd ${CypherDirMsys} && pwd && ls -la Makefile && make clean && make cypher"
 
 & $Bash -lc $MakeCommand
 
