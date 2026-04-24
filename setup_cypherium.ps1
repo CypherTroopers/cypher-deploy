@@ -99,7 +99,14 @@ function Invoke-MsysBashScript {
 
     $TempScript = Join-Path $env:TEMP "$Name.sh"
 
-    Set-Content -Path $TempScript -Value $Script -Encoding ASCII -NoNewline
+    $Script = $Script -replace "`r`n", "`n"
+    $Script = $Script -replace "`r", "`n"
+
+    [System.IO.File]::WriteAllText(
+        $TempScript,
+        $Script,
+        [System.Text.Encoding]::ASCII
+    )
 
     & $Bash (Convert-ToMsysPath $TempScript)
 
@@ -274,12 +281,12 @@ if (Test-Path $WinBlsLib) {
 
 Write-Host "[5.2/10] rebuild BLS/MCL with MSYS2 MinGW64..."
 
-$RebuildBlsScript = @"
+$RebuildBlsScript = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:\$PATH
+export PATH=/mingw64/bin:/usr/bin:__GO_BIN_MSYS__:$PATH
 
 echo "gcc:"
 which gcc
@@ -303,49 +310,51 @@ git clone --recursive https://github.com/herumi/bls.git
 echo "Build mcl..."
 cd /tmp/cypher-bls-build/mcl
 make clean || true
-make -j\$(nproc) lib/libmcl.a
+make -j$(nproc) lib/libmcl.a
 
 echo "Build bls..."
 cd /tmp/cypher-bls-build/bls
 make clean || true
-make -j\$(nproc)
+make -j$(nproc)
 
 echo "Generated static libraries:"
 find /tmp/cypher-bls-build -type f -name "*.a" -print
-"@
+'@
+
+$RebuildBlsScript = $RebuildBlsScript.Replace("__GO_BIN_MSYS__", $GoBinMsys)
 
 Invoke-MsysBashScript -Script $RebuildBlsScript -Name "cypher-rebuild-bls"
 
 Write-Host "[5.3/10] install rebuilt BLS/MCL libs..."
 
-$InstallBlsScript = @"
+$InstallBlsScript = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:\$PATH
+export PATH=/mingw64/bin:/usr/bin:$PATH
 
-cd "${CypherDirMsys}"
+cd "__CYPHER_DIR_MSYS__"
 
-dst="${CypherDirMsys}/crypto/bls/lib/win"
-mkdir -p "\$dst"
-rm -f "\$dst"/*.a
+dst="__CYPHER_DIR_MSYS__/crypto/bls/lib/win"
+mkdir -p "$dst"
+rm -f "$dst"/*.a
 
 copy_required_lib() {
-  local name="\$1"
+  local name="$1"
   local found=""
 
-  found="\$(find /tmp/cypher-bls-build -type f -name "\$name" | head -1 || true)"
+  found="$(find /tmp/cypher-bls-build -type f -name "$name" -print -quit)"
 
-  if [ -z "\$found" ] || [ ! -f "\$found" ]; then
-    echo "ERROR: required library not found: \$name"
+  if [ -z "$found" ] || [ ! -f "$found" ]; then
+    echo "ERROR: required library not found: $name"
     echo "Available .a files:"
-    find /tmp/cypher-bls-build -type f -name "*.a" -print || true
+    find /tmp/cypher-bls-build -type f -name "*.a" -print
     exit 20
   fi
 
-  echo "Copy \$found -> \$dst/\$name"
-  cp -f "\$found" "\$dst/\$name"
+  echo "Copy $found -> $dst/$name"
+  cp -f "$found" "$dst/$name"
 }
 
 copy_required_lib "libmcl.a"
@@ -355,46 +364,50 @@ copy_required_lib "libbls384_256.a"
 copy_required_lib "libbls512.a"
 
 echo "Installed win libs:"
-ls -la "\$dst"
+ls -la "$dst"
 
 echo "Copy win libs to crypto/bls/lib root..."
-cp -f "\$dst"/*.a "${CypherDirMsys}/crypto/bls/lib/"
+cp -f "$dst"/*.a "__CYPHER_DIR_MSYS__/crypto/bls/lib/"
 
 echo "Root BLS libs:"
-ls -la "${CypherDirMsys}/crypto/bls/lib/"*.a
-"@
+ls -la "__CYPHER_DIR_MSYS__/crypto/bls/lib/"*.a
+'@
+
+$InstallBlsScript = $InstallBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
 
 Invoke-MsysBashScript -Script $InstallBlsScript -Name "cypher-install-bls"
 
 Write-Host "[5.4/10] verify rebuilt BLS/MCL libs..."
 
-$VerifyBlsScript = @"
+$VerifyBlsScript = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
 export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:\$PATH
+export PATH=/mingw64/bin:/usr/bin:$PATH
 
 rm -rf /tmp/blscheck
 mkdir -p /tmp/blscheck
 cd /tmp/blscheck
 
-for a in "${CypherDirMsys}"/crypto/bls/lib/win/*.a; do
-  echo "===== \$a ====="
+for a in "__CYPHER_DIR_MSYS__"/crypto/bls/lib/win/*.a; do
+  echo "===== $a ====="
   rm -f *.o
-  ar x "\$a"
+  ar x "$a"
   file *.o | head -5
 
   if file *.o | head -5 | grep -qi "i386\|80386\|32-bit"; then
-    echo "ERROR: 32-bit object detected in \$a"
+    echo "ERROR: 32-bit object detected in $a"
     exit 30
   fi
 
   if ! file *.o | head -5 | grep -qi "x86-64\|x86_64"; then
-    echo "WARNING: x86-64 object was not clearly detected in \$a"
+    echo "WARNING: x86-64 object was not clearly detected in $a"
   fi
 done
-"@
+'@
+
+$VerifyBlsScript = $VerifyBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
 
 Invoke-MsysBashScript -Script $VerifyBlsScript -Name "cypher-verify-bls"
 
