@@ -41,19 +41,6 @@ function Convert-ToMsysPath {
     return $MsysPath
 }
 
-function Invoke-Checked {
-    param(
-        [string]$Command,
-        [string[]]$Arguments
-    )
-
-    & $Command @Arguments
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Command failed: $Command $($Arguments -join ' ')"
-    }
-}
-
 function Ensure-Command {
     param(
         [string]$Command,
@@ -218,7 +205,7 @@ Add-UserPath "$env:GOPATH\bin"
 go version
 go env -w GO111MODULE=off
 
-Write-Host "[3/10] install build dependencies via MSYS2..."
+Write-Host "[3/10] install/check MSYS2 packages..."
 
 $Bash = "C:\msys64\usr\bin\bash.exe"
 
@@ -260,26 +247,11 @@ Set-Location $CypherDir
 git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 
-$WinBlsLib = Join-Path $CypherDir "crypto\bls\lib\win"
-$BlsTarget = Join-Path $CypherDir "crypto\bls\lib"
-
 $CypherDirMsys = Convert-ToMsysPath $CypherDir
 $GoBinMsys = Convert-ToMsysPath $GoBin
 $GoPathMsys = Convert-ToMsysPath $env:GOPATH
 
-Write-Host "[5.1/10] backup existing BLS/MCL win libs..."
-
-if (Test-Path $WinBlsLib) {
-    $BackupName = "win.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
-    $BackupPath = Join-Path $BlsTarget $BackupName
-    Copy-Item -Path $WinBlsLib -Destination $BackupPath -Recurse -Force
-    Write-Host "Backup created:"
-    Write-Host $BackupPath
-} else {
-    throw "Windows BLS library directory was not found: $WinBlsLib"
-}
-
-Write-Host "[5.2/10] restore repository Windows BLS/MCL libs..."
+Write-Host "[5.1/10] restore repository Windows BLS/MCL libs..."
 
 $RestoreBlsScript = @'
 #!/usr/bin/env bash
@@ -287,24 +259,27 @@ set -euo pipefail
 
 cd "__CYPHER_DIR_MSYS__"
 
-echo "Restore crypto/bls/lib/win from repository..."
-git checkout -- crypto/bls/lib/win
+if [ -d "crypto/bls/lib/win" ]; then
+  echo "Restore crypto/bls/lib/win from repository..."
+  git checkout -- crypto/bls/lib/win || true
 
-echo "Remove root BLS/MCL libs..."
-rm -f crypto/bls/lib/*.a
+  echo "Remove root BLS/MCL libs..."
+  rm -f crypto/bls/lib/*.a
 
-echo "Copy repository win libs to crypto/bls/lib root..."
-cp -f crypto/bls/lib/win/*.a crypto/bls/lib/
+  echo "Copy repository win libs to crypto/bls/lib root..."
+  cp -f crypto/bls/lib/win/*.a crypto/bls/lib/
 
-echo "Windows BLS/MCL libs:"
-ls -la crypto/bls/lib/win
+  echo "Windows BLS/MCL libs:"
+  ls -la crypto/bls/lib/win
 
-echo "Root BLS/MCL libs:"
-ls -la crypto/bls/lib/*.a
+  echo "Root BLS/MCL libs:"
+  ls -la crypto/bls/lib/*.a
+else
+  echo "WARNING: crypto/bls/lib/win was not found. build_windows.ps1 may handle this."
+fi
 '@
 
 $RestoreBlsScript = $RestoreBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
-
 Invoke-MsysBashScript -Script $RestoreBlsScript -Name "cypher-restore-bls"
 
 Write-Host "[6/10] clone GOPATH dependencies..."
@@ -381,15 +356,17 @@ if (Test-Path $DukLoggingPath) {
     Set-Content -Path $DukLoggingPath -Value $Content -NoNewline
 }
 
-Write-Host "[8/10] build cypher..."
+Write-Host "[8/10] build cypher with build_windows.ps1..."
 
 Set-Location $CypherDir
 
-Write-Host "Current directory before make:"
+Write-Host "Current directory before Windows build:"
 Get-Location
 
-if (-not (Test-Path ".\Makefile")) {
-    throw "Makefile was not found in current directory. Current directory is: $(Get-Location)"
+$BuildWindowsScript = Join-Path $CypherDir "build\build_windows.ps1"
+
+if (-not (Test-Path $BuildWindowsScript)) {
+    throw "build_windows.ps1 was not found: $BuildWindowsScript"
 }
 
 $env:GO111MODULE = "off"
@@ -401,52 +378,50 @@ $env:CGO_LDFLAGS_ALLOW = ".*"
 $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_CXXFLAGS_ALLOW = ".*"
 
+Add-PathForCurrentSession $GoBin
+Add-PathForCurrentSession "$env:GOPATH\bin"
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
 
-if (-not (Test-Path $Bash)) {
-    throw "MSYS2 bash was not found at $Bash"
-}
+Write-Host "Go:"
+go version
 
-$CypherDirMsys = Convert-ToMsysPath $CypherDir
-$GoBinMsys = Convert-ToMsysPath $GoBin
-$GoPathMsys = Convert-ToMsysPath $env:GOPATH
+Write-Host "MSYS2 gcc:"
+& $Bash -lc "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:$GoBinMsys:`$PATH; which gcc; gcc -dumpmachine"
 
-Write-Host "MSYS2 cypher path:"
-Write-Host $CypherDirMsys
+Write-Host "Running:"
+Write-Host ".\build\build_windows.ps1"
 
-Write-Host "MSYS2 Go bin path:"
-Write-Host $GoBinMsys
-
-Write-Host "MSYS2 GOPATH:"
-Write-Host $GoPathMsys
-
-$MakeCommand = "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=/mingw64/bin/gcc; export CXX=/mingw64/bin/g++; export CGO_LDFLAGS_ALLOW='.*'; export CGO_CFLAGS_ALLOW='.*'; export CGO_CXXFLAGS_ALLOW='.*'; cd ${CypherDirMsys} && pwd && which go && go version && which gcc && gcc -dumpmachine && ls -la Makefile && make clean && make cypher"
-
-& $Bash -lc $MakeCommand
+powershell.exe `
+    -NoProfile `
+    -ExecutionPolicy Bypass `
+    -File $BuildWindowsScript
 
 if ($LASTEXITCODE -ne 0) {
-    throw "MSYS2 bash make cypher failed with exit code $LASTEXITCODE"
+    throw "build_windows.ps1 failed with exit code $LASTEXITCODE"
 }
 
-$CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
-$CypherNoExt = Join-Path $CypherDir "build\bin\cypher"
+Write-Host "[8.1/10] verify cypher.exe version..."
 
-if ((-not (Test-Path $CypherExe)) -and (-not (Test-Path $CypherNoExt))) {
-    throw "make cypher finished, but no cypher binary was found under build\bin."
+$CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
+
+if (-not (Test-Path $CypherExe)) {
+    throw "cypher.exe was not found after build_windows.ps1: $CypherExe"
+}
+
+& $CypherExe version
+
+if ($LASTEXITCODE -ne 0) {
+    throw "cypher.exe version failed with exit code $LASTEXITCODE"
 }
 
 Write-Host "[9/10] init chain data..."
 
-if (Test-Path $CypherExe) {
-    $CypherBinary = $CypherExe
-} elseif (Test-Path $CypherNoExt) {
-    $CypherBinary = $CypherNoExt
-} else {
-    throw "cypher binary was not found under build\bin."
-}
+& $CypherExe --datadir chaindbname init .\genesistest.json
 
-& $CypherBinary --datadir chaindbname init .\genesistest.json
+if ($LASTEXITCODE -ne 0) {
+    throw "cypher init failed with exit code $LASTEXITCODE"
+}
 
 Write-Host "[10/10] create start script and register pm2..."
 
@@ -458,8 +433,9 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $CypherExe = Join-Path $PSScriptRoot "build\bin\cypher.exe"
+
 if (-not (Test-Path $CypherExe)) {
-    $CypherExe = Join-Path $PSScriptRoot "build\bin\cypher"
+    throw "cypher.exe was not found: $CypherExe"
 }
 
 $ExtIp = (& curl.exe -4 -s ifconfig.io).Trim()
