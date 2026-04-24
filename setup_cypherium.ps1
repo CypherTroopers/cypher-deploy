@@ -121,8 +121,9 @@ $env:GO111MODULE = "off"
 $env:GOPATH = Join-Path $HOME "go"
 [Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
 
+$GoVersion = "1.26.2"
 $GoInstallRoot = Join-Path $HOME "go-sdk"
-$GoRoot = Join-Path $GoInstallRoot "go1.24.1"
+$GoRoot = Join-Path $GoInstallRoot "go$GoVersion"
 $GoBin = Join-Path $GoRoot "bin"
 
 New-Item -ItemType Directory -Force $GoInstallRoot | Out-Null
@@ -187,16 +188,16 @@ node -v
 Write-Host "npm:"
 npm -v
 
-Write-Host "[2/10] install Go 1.24.1..."
+Write-Host "[2/10] install Go $GoVersion..."
 
-$GoZip = Join-Path $env:TEMP "go1.24.1.windows-amd64.zip"
-$GoUrl = "https://go.dev/dl/go1.24.1.windows-amd64.zip"
+$GoZip = Join-Path $env:TEMP "go$GoVersion.windows-amd64.zip"
+$GoUrl = "https://go.dev/dl/go$GoVersion.windows-amd64.zip"
 
 if (-not (Test-Path $GoRoot)) {
-    Write-Host "Downloading Go 1.24.1..."
+    Write-Host "Downloading Go $GoVersion..."
     Invoke-WebRequest -Uri $GoUrl -OutFile $GoZip
 
-    $ExtractDir = Join-Path $env:TEMP "go1.24.1-extract"
+    $ExtractDir = Join-Path $env:TEMP "go$GoVersion-extract"
     Remove-Item -Recurse -Force $ExtractDir -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force $ExtractDir | Out-Null
 
@@ -260,7 +261,6 @@ git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
 
 $WinBlsLib = Join-Path $CypherDir "crypto\bls\lib\win"
-$LinuxBlsLib = Join-Path $CypherDir "crypto\bls\lib\linux"
 $BlsTarget = Join-Path $CypherDir "crypto\bls\lib"
 
 $CypherDirMsys = Convert-ToMsysPath $CypherDir
@@ -276,214 +276,36 @@ if (Test-Path $WinBlsLib) {
     Write-Host "Backup created:"
     Write-Host $BackupPath
 } else {
-    New-Item -ItemType Directory -Force $WinBlsLib | Out-Null
+    throw "Windows BLS library directory was not found: $WinBlsLib"
 }
 
-Write-Host "[5.2/10] rebuild BLS/MCL with MSYS2 MinGW64..."
+Write-Host "[5.2/10] restore repository Windows BLS/MCL libs..."
 
-$RebuildBlsScript = @'
+$RestoreBlsScript = @'
 #!/usr/bin/env bash
 set -euo pipefail
-
-export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:__GO_BIN_MSYS__:$PATH
-
-echo "gcc:"
-which gcc
-gcc -dumpmachine
-
-echo "g++:"
-which g++
-g++ -dumpmachine
-
-echo "python:"
-which python
-python --version
-
-echo "Clean build directory..."
-rm -rf /tmp/cypher-bls-build
-mkdir -p /tmp/cypher-bls-build
-cd /tmp/cypher-bls-build
-
-echo "Clone herumi/mcl..."
-git clone --recursive https://github.com/herumi/mcl.git
-
-echo "Clone herumi/bls..."
-git clone --recursive https://github.com/herumi/bls.git
-
-echo "Build mcl..."
-cd /tmp/cypher-bls-build/mcl
-make clean || true
-make -j$(nproc) lib/libmcl.a
-
-echo "Build bls default..."
-cd /tmp/cypher-bls-build/bls
-make clean || true
-make -j$(nproc)
-
-echo "Generated static libraries:"
-find /tmp/cypher-bls-build -type f -name "*.a" -print
-'@
-
-$RebuildBlsScript = $RebuildBlsScript.Replace("__GO_BIN_MSYS__", $GoBinMsys)
-
-Invoke-MsysBashScript -Script $RebuildBlsScript -Name "cypher-rebuild-bls"
-
-Write-Host "[5.3/10] install rebuilt BLS/MCL libs..."
-
-$InstallBlsScript = @'
-#!/usr/bin/env bash
-set -euo pipefail
-
-export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:$PATH
 
 cd "__CYPHER_DIR_MSYS__"
 
-dst="__CYPHER_DIR_MSYS__/crypto/bls/lib/win"
-libroot="__CYPHER_DIR_MSYS__/crypto/bls/lib"
+echo "Restore crypto/bls/lib/win from repository..."
+git checkout -- crypto/bls/lib/win
 
-mkdir -p "$dst"
+echo "Remove root BLS/MCL libs..."
+rm -f crypto/bls/lib/*.a
 
-echo "Search backup that contains libbls256.a, libbls384.a, and libbls512.a..."
-backup=""
+echo "Copy repository win libs to crypto/bls/lib root..."
+cp -f crypto/bls/lib/win/*.a crypto/bls/lib/
 
-for d in "$libroot"/win.bak.*; do
-  if [ -d "$d" ] && [ -f "$d/libbls256.a" ] && [ -f "$d/libbls384.a" ] && [ -f "$d/libbls512.a" ]; then
-    backup="$d"
-  fi
-done
+echo "Windows BLS/MCL libs:"
+ls -la crypto/bls/lib/win
 
-echo "selected backup=$backup"
-
-if [ -z "$backup" ]; then
-  echo "No complete backup found. Try git checkout -- crypto/bls/lib/win ..."
-  git checkout -- crypto/bls/lib/win || true
-
-  if [ -f "$dst/libbls256.a" ] && [ -f "$dst/libbls384.a" ] && [ -f "$dst/libbls512.a" ]; then
-    echo "Repository win libs restored by git checkout."
-  else
-    echo "ERROR: no backup or repository files contain libbls256.a, libbls384.a, and libbls512.a"
-    echo "Available backups:"
-    for d in "$libroot"/win.bak.*; do
-      echo "===== $d ====="
-      ls -la "$d" || true
-    done
-    echo "Current win dir:"
-    ls -la "$dst" || true
-    exit 20
-  fi
-fi
-
-echo "Install rebuilt libraries and restore missing BLS variants..."
-rm -f "$dst"/*.a
-
-copy_required_lib() {
-  local name="$1"
-  local found=""
-
-  found="$(find /tmp/cypher-bls-build -type f -name "$name" -print -quit)"
-
-  if [ -n "$found" ] && [ -f "$found" ]; then
-    echo "Copy rebuilt $found -> $dst/$name"
-    cp -f "$found" "$dst/$name"
-    return 0
-  fi
-
-  if [ -n "$backup" ] && [ -f "$backup/$name" ]; then
-    echo "Restore $name from complete backup: $backup/$name"
-    cp -f "$backup/$name" "$dst/$name"
-    return 0
-  fi
-
-  if [ -f "$libroot/win/$name" ]; then
-    echo "Restore $name from repository-restored win dir: $libroot/win/$name"
-    cp -f "$libroot/win/$name" "$dst/$name"
-    return 0
-  fi
-
-  echo "ERROR: required library not found: $name"
-  echo "Available rebuilt .a files:"
-  find /tmp/cypher-bls-build -type f -name "*.a" -print || true
-  echo "Current win dir:"
-  ls -la "$dst" || true
-  exit 20
-}
-
-copy_required_lib "libmcl.a"
-copy_required_lib "libbls256.a"
-copy_required_lib "libbls384.a"
-copy_required_lib "libbls384_256.a"
-copy_required_lib "libbls512.a"
-
-echo "Installed win libs:"
-ls -la "$dst"
-
-echo "Copy win libs to crypto/bls/lib root..."
-cp -f "$dst"/*.a "$libroot/"
-
-echo "Root BLS libs:"
-ls -la "$libroot"/*.a
+echo "Root BLS/MCL libs:"
+ls -la crypto/bls/lib/*.a
 '@
 
-$InstallBlsScript = $InstallBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
+$RestoreBlsScript = $RestoreBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
 
-Invoke-MsysBashScript -Script $InstallBlsScript -Name "cypher-install-bls"
-
-Write-Host "[5.4/10] verify rebuilt BLS/MCL libs..."
-
-$VerifyBlsScript = @'
-#!/usr/bin/env bash
-set -euo pipefail
-
-export MSYSTEM=MINGW64
-export PATH=/mingw64/bin:/usr/bin:$PATH
-
-rm -rf /tmp/blscheck
-mkdir -p /tmp/blscheck
-cd /tmp/blscheck
-
-for a in "__CYPHER_DIR_MSYS__"/crypto/bls/lib/win/*.a; do
-  echo "===== $a ====="
-  rm -f *.o
-  ar x "$a"
-  file *.o | head -5
-
-  if file *.o | head -5 | grep -qi "i386\|80386\|32-bit"; then
-    echo "ERROR: 32-bit object detected in $a"
-    exit 30
-  fi
-
-  if ! file *.o | head -5 | grep -qi "x86-64\|x86_64"; then
-    echo "WARNING: x86-64 object was not clearly detected in $a"
-  fi
-done
-'@
-
-$VerifyBlsScript = $VerifyBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
-
-Invoke-MsysBashScript -Script $VerifyBlsScript -Name "cypher-verify-bls"
-
-Write-Host "[5.5/10] copy Windows BLS library to root lib directory..."
-
-if (Test-Path $WinBlsLib) {
-    Copy-Item -Path "$WinBlsLib\*" -Destination $BlsTarget -Force
-} elseif (Test-Path $LinuxBlsLib) {
-    throw @"
-Windows BLS library was not found.
-
-Expected Windows BLS library:
-$WinBlsLib
-
-Found Linux BLS library:
-$LinuxBlsLib
-
-Linux .so files cannot be used for Windows native build.
-Please prepare crypto\bls\lib\win files, or use WSL Ubuntu/Linux instead.
-"@
-} else {
-    throw "No BLS library directory found under crypto\bls\lib."
-}
+Invoke-MsysBashScript -Script $RestoreBlsScript -Name "cypher-restore-bls"
 
 Write-Host "[6/10] clone GOPATH dependencies..."
 
@@ -575,6 +397,9 @@ $env:GOFLAGS = "-mod=mod"
 $env:CGO_ENABLED = "1"
 $env:CC = "gcc"
 $env:CXX = "g++"
+$env:CGO_LDFLAGS_ALLOW = ".*"
+$env:CGO_CFLAGS_ALLOW = ".*"
+$env:CGO_CXXFLAGS_ALLOW = ".*"
 
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
@@ -596,7 +421,7 @@ Write-Host $GoBinMsys
 Write-Host "MSYS2 GOPATH:"
 Write-Host $GoPathMsys
 
-$MakeCommand = "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=/mingw64/bin/gcc; export CXX=/mingw64/bin/g++; cd ${CypherDirMsys} && pwd && which gcc && gcc -dumpmachine && which go && go version && ls -la Makefile && make clean && make cypher"
+$MakeCommand = "export MSYSTEM=MINGW64; export PATH=/mingw64/bin:/usr/bin:${GoBinMsys}:`$PATH; export GOPATH=${GoPathMsys}; export GO111MODULE=off; export CGO_ENABLED=1; export CC=/mingw64/bin/gcc; export CXX=/mingw64/bin/g++; export CGO_LDFLAGS_ALLOW='.*'; export CGO_CFLAGS_ALLOW='.*'; export CGO_CXXFLAGS_ALLOW='.*'; cd ${CypherDirMsys} && pwd && which go && go version && which gcc && gcc -dumpmachine && ls -la Makefile && make clean && make cypher"
 
 & $Bash -lc $MakeCommand
 
