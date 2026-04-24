@@ -269,8 +269,6 @@ $GoPathMsys = Convert-ToMsysPath $env:GOPATH
 
 Write-Host "[5.1/10] backup existing BLS/MCL win libs..."
 
-$BackupPath = $null
-
 if (Test-Path $WinBlsLib) {
     $BackupName = "win.bak.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
     $BackupPath = Join-Path $BlsTarget $BackupName
@@ -279,11 +277,6 @@ if (Test-Path $WinBlsLib) {
     Write-Host $BackupPath
 } else {
     New-Item -ItemType Directory -Force $WinBlsLib | Out-Null
-}
-
-$BackupPathMsys = ""
-if ($null -ne $BackupPath) {
-    $BackupPathMsys = Convert-ToMsysPath $BackupPath
 }
 
 Write-Host "[5.2/10] rebuild BLS/MCL with MSYS2 MinGW64..."
@@ -348,9 +341,41 @@ export PATH=/mingw64/bin:/usr/bin:$PATH
 cd "__CYPHER_DIR_MSYS__"
 
 dst="__CYPHER_DIR_MSYS__/crypto/bls/lib/win"
-backup="__BACKUP_PATH_MSYS__"
+libroot="__CYPHER_DIR_MSYS__/crypto/bls/lib"
 
 mkdir -p "$dst"
+
+echo "Search backup that contains libbls256.a, libbls384.a, and libbls512.a..."
+backup=""
+
+for d in "$libroot"/win.bak.*; do
+  if [ -d "$d" ] && [ -f "$d/libbls256.a" ] && [ -f "$d/libbls384.a" ] && [ -f "$d/libbls512.a" ]; then
+    backup="$d"
+  fi
+done
+
+echo "selected backup=$backup"
+
+if [ -z "$backup" ]; then
+  echo "No complete backup found. Try git checkout -- crypto/bls/lib/win ..."
+  git checkout -- crypto/bls/lib/win || true
+
+  if [ -f "$dst/libbls256.a" ] && [ -f "$dst/libbls384.a" ] && [ -f "$dst/libbls512.a" ]; then
+    echo "Repository win libs restored by git checkout."
+  else
+    echo "ERROR: no backup or repository files contain libbls256.a, libbls384.a, and libbls512.a"
+    echo "Available backups:"
+    for d in "$libroot"/win.bak.*; do
+      echo "===== $d ====="
+      ls -la "$d" || true
+    done
+    echo "Current win dir:"
+    ls -la "$dst" || true
+    exit 20
+  fi
+fi
+
+echo "Install rebuilt libraries and restore missing BLS variants..."
 rm -f "$dst"/*.a
 
 copy_required_lib() {
@@ -366,20 +391,22 @@ copy_required_lib() {
   fi
 
   if [ -n "$backup" ] && [ -f "$backup/$name" ]; then
-    echo "WARNING: $name was not generated. Restore from backup: $backup/$name"
+    echo "Restore $name from complete backup: $backup/$name"
     cp -f "$backup/$name" "$dst/$name"
+    return 0
+  fi
+
+  if [ -f "$libroot/win/$name" ]; then
+    echo "Restore $name from repository-restored win dir: $libroot/win/$name"
+    cp -f "$libroot/win/$name" "$dst/$name"
     return 0
   fi
 
   echo "ERROR: required library not found: $name"
   echo "Available rebuilt .a files:"
   find /tmp/cypher-bls-build -type f -name "*.a" -print || true
-
-  if [ -n "$backup" ]; then
-    echo "Backup files:"
-    ls -la "$backup" || true
-  fi
-
+  echo "Current win dir:"
+  ls -la "$dst" || true
   exit 20
 }
 
@@ -393,14 +420,13 @@ echo "Installed win libs:"
 ls -la "$dst"
 
 echo "Copy win libs to crypto/bls/lib root..."
-cp -f "$dst"/*.a "__CYPHER_DIR_MSYS__/crypto/bls/lib/"
+cp -f "$dst"/*.a "$libroot/"
 
 echo "Root BLS libs:"
-ls -la "__CYPHER_DIR_MSYS__/crypto/bls/lib/"*.a
+ls -la "$libroot"/*.a
 '@
 
 $InstallBlsScript = $InstallBlsScript.Replace("__CYPHER_DIR_MSYS__", $CypherDirMsys)
-$InstallBlsScript = $InstallBlsScript.Replace("__BACKUP_PATH_MSYS__", $BackupPathMsys)
 
 Invoke-MsysBashScript -Script $InstallBlsScript -Name "cypher-install-bls"
 
