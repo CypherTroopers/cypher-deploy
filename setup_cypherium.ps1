@@ -47,6 +47,10 @@ function Winget-Install {
         --source winget `
         --accept-package-agreements `
         --accept-source-agreements
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "winget install failed: $Id"
+    }
 }
 
 function Clone-IfMissing {
@@ -95,6 +99,37 @@ function Resolve-NpmCommand {
     }
 
     return $null
+}
+
+function Invoke-WithRuntimePath {
+    param(
+        [string]$MingwBin,
+        [string]$BinDir,
+        [string[]]$CommandAndArgs
+    )
+
+    if (-not $CommandAndArgs -or $CommandAndArgs.Count -lt 1) {
+        throw "Invoke-WithRuntimePath requires command."
+    }
+
+    $oldPath = $env:Path
+
+    try {
+        $env:Path = "$BinDir;$MingwBin;C:\Windows\System32;C:\Windows"
+
+        $exe = $CommandAndArgs[0]
+        $args = @()
+
+        if ($CommandAndArgs.Count -gt 1) {
+            $args = $CommandAndArgs[1..($CommandAndArgs.Count - 1)]
+        }
+
+        & $exe @args
+        return $LASTEXITCODE
+    }
+    finally {
+        $env:Path = $oldPath
+    }
 }
 
 $env:GOPATH = Join-Path $HOME "go"
@@ -171,6 +206,10 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[3/10] install/check pm2..."
 
 & $NpmCmd install -g pm2
+if ($LASTEXITCODE -ne 0) {
+    throw "npm install -g pm2 failed"
+}
+
 Refresh-PathFromRegistry
 Add-PathForCurrentSession "$env:APPDATA\npm"
 
@@ -303,18 +342,18 @@ if (-not (Test-Path -LiteralPath $CypherExe)) {
     throw "cypher.exe was not found: $CypherExe"
 }
 
-& $CypherExe version
-if ($LASTEXITCODE -ne 0) {
-    throw "cypher.exe version failed with exit code $LASTEXITCODE"
+$exitCode = Invoke-WithRuntimePath -MingwBin $MingwBin -BinDir $BinDir -CommandAndArgs @($CypherExe, "version")
+if ($exitCode -ne 0) {
+    throw "cypher.exe version failed with exit code $exitCode. This is often a DLL conflict; keep only mingw64 runtime DLLs first on PATH."
 }
 
 Write-Host "[9/10] init chain data..."
 
 Set-Location $CypherDir
 
-& $CypherExe --datadir chaindbname init .\genesistest.json
-if ($LASTEXITCODE -ne 0) {
-    throw "cypher init failed with exit code $LASTEXITCODE"
+$exitCode = Invoke-WithRuntimePath -MingwBin $MingwBin -BinDir $BinDir -CommandAndArgs @($CypherExe, "--datadir", "chaindbname", "init", ".\genesistest.json")
+if ($exitCode -ne 0) {
+    throw "cypher init failed with exit code $exitCode"
 }
 
 Write-Host "[10/10] create start script and register pm2..."
@@ -326,6 +365,8 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $CypherExe = Join-Path $PSScriptRoot "build\bin\cypher.exe"
+$MingwBin = "C:\msys64\mingw64\bin"
+
 if (-not (Test-Path -LiteralPath $CypherExe)) {
     throw "cypher.exe was not found: $CypherExe"
 }
@@ -344,6 +385,8 @@ if (-not $ExtIp) {
 if (-not $ExtIp) {
     throw "Failed to get external IPv4 address."
 }
+
+$env:Path = "$PSScriptRoot\build\bin;$MingwBin;C:\Windows\System32;C:\Windows"
 
 & $CypherExe `
   --verbosity 4 `
