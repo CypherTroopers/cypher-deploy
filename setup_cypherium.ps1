@@ -85,6 +85,7 @@ function Resolve-NpmCommand {
     }
 
     $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+
     $candidates = @(
         (Join-Path $env:ProgramFiles "nodejs\npm.cmd"),
         $(if ($programFilesX86) { Join-Path $programFilesX86 "nodejs\npm.cmd" }),
@@ -132,6 +133,23 @@ function Invoke-WithRuntimePath {
     }
 }
 
+function Select-MsysToolchain {
+    $ucrtBin = "C:\msys64\ucrt64\bin"
+    $mingwBin = "C:\msys64\mingw64\bin"
+
+    if (Test-Path -LiteralPath (Join-Path $ucrtBin "gcc.exe")) {
+        return @{
+            Name = "ucrt64"
+            Bin  = $ucrtBin
+        }
+    }
+
+    return @{
+        Name = "mingw64"
+        Bin  = $mingwBin
+    }
+}
+
 $env:GOPATH = Join-Path $HOME "go"
 $env:GO111MODULE = "off"
 $env:GOFLAGS = ""
@@ -144,6 +162,7 @@ Add-PathForCurrentSession "C:\Python312"
 Add-PathForCurrentSession "C:\Python312\Scripts"
 Add-PathForCurrentSession "C:\Program Files\nodejs"
 Add-PathForCurrentSession "$env:APPDATA\npm"
+Add-PathForCurrentSession "C:\msys64\ucrt64\bin"
 Add-PathForCurrentSession "C:\msys64\mingw64\bin"
 Add-PathForCurrentSession "C:\msys64\usr\bin"
 
@@ -180,6 +199,9 @@ if (-not (Test-Path -LiteralPath "C:\msys64")) {
 Refresh-PathFromRegistry
 Add-PathForCurrentSession "C:\Program Files\nodejs"
 Add-PathForCurrentSession "$env:APPDATA\npm"
+Add-PathForCurrentSession "C:\msys64\ucrt64\bin"
+Add-PathForCurrentSession "C:\msys64\mingw64\bin"
+Add-PathForCurrentSession "C:\msys64\usr\bin"
 
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { throw "git.exe was not found in PATH." }
 if (-not (Get-Command go.exe -ErrorAction SilentlyContinue)) { throw "go.exe was not found in PATH." }
@@ -198,10 +220,14 @@ if (-not (Test-Path -LiteralPath $bash)) {
     throw "MSYS2 bash was not found at $bash."
 }
 
-& $bash -lc "pacman -Sy --noconfirm --needed make git mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl mingw-w64-x86_64-gmp"
+$preferredPrefix = "mingw-w64-ucrt-x86_64"
+& $bash -lc "pacman -Sy --noconfirm --needed make git $preferredPrefix-gcc $preferredPrefix-openssl $preferredPrefix-gmp"
 if ($LASTEXITCODE -ne 0) {
     throw "MSYS2 package install failed with exit code $LASTEXITCODE"
 }
+
+$toolchain = Select-MsysToolchain
+Write-Host "Using MSYS2 toolchain: $($toolchain.Name)"
 
 Write-Host "[3/10] install/check pm2..."
 
@@ -221,6 +247,7 @@ Write-Host "[4/10] clone/update cypher repo..."
 
 $CypheriumRoot = Join-Path $env:GOPATH "src\github.com\cypherium"
 $CypherDir = Join-Path $CypheriumRoot "cypher"
+
 New-Item -ItemType Directory -Force -Path $CypheriumRoot | Out-Null
 Set-Location $CypheriumRoot
 
@@ -292,7 +319,8 @@ Write-Host "[7/10] restore BLS/MCL libs and build cypher.exe..."
 Set-Location $CypherDir
 
 $BinDir = Join-Path $CypherDir "build\bin"
-$MingwBin = "C:\msys64\mingw64\bin"
+$MingwBin = $toolchain.Bin
+
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 
 if (-not (Test-Path -LiteralPath ".\crypto\bls\lib\win")) {
@@ -344,7 +372,7 @@ if (-not (Test-Path -LiteralPath $CypherExe)) {
 
 $exitCode = Invoke-WithRuntimePath -MingwBin $MingwBin -BinDir $BinDir -CommandAndArgs @($CypherExe, "version")
 if ($exitCode -ne 0) {
-    throw "cypher.exe version failed with exit code $exitCode. This is often a DLL conflict; keep only mingw64 runtime DLLs first on PATH."
+    throw "cypher.exe version failed with exit code $exitCode. This is often a DLL conflict; keep only MSYS2 runtime DLLs first on PATH."
 }
 
 Write-Host "[9/10] init chain data..."
@@ -359,19 +387,21 @@ if ($exitCode -ne 0) {
 Write-Host "[10/10] create start script and register pm2..."
 
 $StartScript = Join-Path $CypherDir "start-cypher.ps1"
+
 $StartScriptContent = @'
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 
 $CypherExe = Join-Path $PSScriptRoot "build\bin\cypher.exe"
-$MingwBin = "C:\msys64\mingw64\bin"
+$MingwBin = "TOOLCHAIN_BIN_PLACEHOLDER"
 
 if (-not (Test-Path -LiteralPath $CypherExe)) {
     throw "cypher.exe was not found: $CypherExe"
 }
 
 $ExtIp = ""
+
 try {
     $ExtIp = (& curl.exe -4 -s ifconfig.io).Trim()
 } catch {
@@ -411,6 +441,7 @@ $env:Path = "$PSScriptRoot\build\bin;$MingwBin;C:\Windows\System32;C:\Windows"
   console
 '@
 
+$StartScriptContent = $StartScriptContent.Replace("TOOLCHAIN_BIN_PLACEHOLDER", $MingwBin)
 Set-Content -Path $StartScript -Value $StartScriptContent -Encoding UTF8
 
 cmd /c "pm2 delete cypher-node 2>nul"
