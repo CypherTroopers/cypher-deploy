@@ -17,6 +17,9 @@ chmod +x setup_cypherium.sh
 ```bash
 pm2 logs
  ```
+```bash
+Ctrl+C
+ ```
 ## start mining (console)
 ```bash
 cd ~/go/src/github.com/cypherium/cypher
