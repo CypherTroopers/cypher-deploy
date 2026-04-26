@@ -11,10 +11,6 @@ linux
 chmod +x setup_cypherium.sh
 ./setup_cypherium.sh
  ```
-powershell
- ```
-powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1
- ```
 
 ## Check logs
 
