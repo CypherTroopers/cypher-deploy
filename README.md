@@ -11,6 +11,11 @@ linux
 chmod +x setup_cypherium.sh
 ./setup_cypherium.sh
  ```
+PowerShell
+ ```
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\setup_cypherium.ps1
+ ```
 
 ## Check logs
 
@@ -24,9 +29,15 @@ Ctrl+C
 ```bash
 cd ~/go/src/github.com/cypherium/cypher
  ```
+Linux
  ```
 ./build/bin/cypher attach ipc:./chaindbname/cypher.ipc
  ```
+PowerShell
+```
+.\build\bin\cypher.exe attach ipc:\\.\pipe\cypher.ipc
+```
+console command
  ```
 personal.newAccount("your password")
  ```
