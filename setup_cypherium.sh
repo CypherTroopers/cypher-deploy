@@ -14,9 +14,9 @@ sudo apt autoclean -y
 
 echo "[2/10] install Go 1.24.1..."
 cd /tmp
-wget -4 -O go1.24.1.linux-amd64.tar.gz https://go.dev/dl/go1.24.1.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.1.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.2.linux-amd64.tar.gz
 
 go version || true
 go env -w GO111MODULE=off
