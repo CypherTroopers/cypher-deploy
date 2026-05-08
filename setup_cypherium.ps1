@@ -1,7 +1,20 @@
 # setup_cypherium.ps1
+# Run with Administrator PowerShell:
+# powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1
+
+#requires -RunAsAdministrator
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "[0/10] setup environment..."
+
+# ============================================================
+# PowerShell safety check
+# ============================================================
+
+if (-not $PSVersionTable.PSVersion) {
+    throw "This script must be run with PowerShell, not cmd.exe."
+}
 
 # ============================================================
 # Basic environment
@@ -105,7 +118,8 @@ function Git-Clone-IfMissing {
 function Convert-To-MsysPath {
     param([string]$WindowsPath)
 
-    $full = (Resolve-Path $WindowsPath).Path
+    $resolved = Resolve-Path $WindowsPath -ErrorAction Stop
+    $full = $resolved.Path
     $drive = $full.Substring(0, 1).ToLower()
     $rest = $full.Substring(2).Replace("\", "/")
     return "/$drive$rest"
@@ -226,11 +240,11 @@ function Test-RequiredPortsFree {
         $listeners | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table
 
         foreach ($listener in $listeners) {
-            $pid = $listener.OwningProcess
-            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
+            $ownerPid = $listener.OwningProcess
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
 
             if ($proc) {
-                Write-Host "PID $pid : $($proc.Name)"
+                Write-Host "PID $ownerPid : $($proc.Name)"
                 Write-Host "CommandLine: $($proc.CommandLine)"
                 Write-Host ""
             }
@@ -240,6 +254,101 @@ function Test-RequiredPortsFree {
     }
 
     Write-Host "Required ports are free: $($Ports -join ', ')"
+}
+
+function Get-NodeExePath {
+    $nodeExe = "C:\Program Files\nodejs\node.exe"
+
+    if (Test-Path $nodeExe) {
+        return $nodeExe
+    }
+
+    $nodeFound = Get-Command node.exe -ErrorAction SilentlyContinue
+    if ($nodeFound) {
+        return $nodeFound.Source
+    }
+
+    throw "node.exe not found. Node.js installation failed or PATH is broken."
+}
+
+function Get-Pm2JsPath {
+    $candidates = @(
+        "$env:APPDATA\npm\node_modules\pm2\bin\pm2",
+        "$env:APPDATA\npm\node_modules\pm2\bin\pm2.js"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    $npmRoot = ""
+    try {
+        $npmRoot = (npm root -g 2>$null).Trim()
+    } catch {
+        $npmRoot = ""
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($npmRoot)) {
+        $moreCandidates = @(
+            "$npmRoot\pm2\bin\pm2",
+            "$npmRoot\pm2\bin\pm2.js"
+        )
+
+        foreach ($candidate in $moreCandidates) {
+            if (Test-Path $candidate) {
+                return $candidate
+            }
+        }
+    }
+
+    npm install -g pm2
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($npmRoot)) {
+        $moreCandidates = @(
+            "$npmRoot\pm2\bin\pm2",
+            "$npmRoot\pm2\bin\pm2.js"
+        )
+
+        foreach ($candidate in $moreCandidates) {
+            if (Test-Path $candidate) {
+                return $candidate
+            }
+        }
+    }
+
+    throw "PM2 JS entry was not found after npm install -g pm2."
+}
+
+function Remove-CypherChainData {
+    param([string]$DataDir)
+
+    Write-Host "Clean old chain data:"
+    Write-Host "  $DataDir"
+
+    $cleanTargets = @(
+        "$DataDir\cypher\chaindata",
+        "$DataDir\cypher\triecache",
+        "$DataDir\cypher\transactions.rlp",
+        "$DataDir\cypher\colossusX",
+        "$DataDir\history"
+    )
+
+    foreach ($target in $cleanTargets) {
+        if (Test-Path $target) {
+            Write-Host "Removing: $target"
+            Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "Skip missing: $target"
+        }
+    }
 }
 
 # ============================================================
@@ -396,6 +505,13 @@ if (-not (Get-Command pm2 -ErrorAction SilentlyContinue)) {
 
 pm2 --version
 
+# Resolve Node and PM2 early. This avoids pm2.cmd / PATH trouble.
+$nodeExe = Get-NodeExePath
+$pm2Js = Get-Pm2JsPath
+
+Write-Host "Node exe: $nodeExe"
+Write-Host "PM2 JS: $pm2Js"
+
 # ============================================================
 # [4/10] Clone cypher repo
 # ============================================================
@@ -404,6 +520,7 @@ Write-Host "[4/10] clone cypher repo..."
 
 $cypherRoot = "$env:GOPATH\src\github.com\cypherium"
 $cypherDir  = "$cypherRoot\cypher"
+$datadir    = "$cypherDir\chaindbname"
 
 New-Item -ItemType Directory -Force -Path $cypherRoot | Out-Null
 Set-Location $cypherRoot
@@ -416,6 +533,12 @@ Set-Location $cypherDir
 
 git fetch --all
 git checkout ecdsa_1.1_test_colossus-Xv2test
+
+Write-Host "Git branch:"
+git branch --show-current
+
+Write-Host "Git commit:"
+git rev-parse HEAD
 
 # ============================================================
 # [5/10] Copy Windows BLS libraries
@@ -675,26 +798,16 @@ if (Test-Path ".\build\bin\cypher.exe") {
 }
 
 # ============================================================
-# [10/10] Init chain data
+# [10/10] Clean and init chain data
 # ============================================================
 
-Write-Host "[10/10] init chain data..."
+Write-Host "[10/10] clean and init chain data..."
 
 Set-Location $cypherDir
 
 if (-not (Test-Path ".\genesistest.json")) {
     throw "genesistest.json not found: $cypherDir\genesistest.json"
 }
-
-.\build\bin\cypher.exe --datadir chaindbname init .\genesistest.json
-
-# ============================================================
-# Register PM2 with ecosystem.config.js
-# ============================================================
-
-Write-Host "Register pm2 with ecosystem.config.js..."
-
-Set-Location $cypherDir
 
 $cypherExePath = "$cypherDir\build\bin\cypher.exe"
 $ecosystemPath = "$cypherDir\ecosystem.config.js"
@@ -703,28 +816,55 @@ if (-not (Test-Path $cypherExePath)) {
     throw "cypher.exe not found: $cypherExePath"
 }
 
-# Resolve node.exe directly. Do not rely on pm2.cmd finding "node".
-$nodeExe = "C:\Program Files\nodejs\node.exe"
+Write-Host "Cypher dir:"
+Write-Host "  $cypherDir"
 
-if (-not (Test-Path $nodeExe)) {
-    $nodeFound = Get-Command node.exe -ErrorAction SilentlyContinue
-    if ($nodeFound) {
-        $nodeExe = $nodeFound.Source
-    } else {
-        throw "node.exe not found. Node.js installation failed or PATH is broken."
+Write-Host "Datadir:"
+Write-Host "  $datadir"
+
+Write-Host "Genesis file:"
+Write-Host "  $cypherDir\genesistest.json"
+
+Write-Host "Genesis SHA256:"
+Get-FileHash ".\genesistest.json" -Algorithm SHA256 | Format-List
+
+# Stop old PM2 process before cleaning DB.
+Write-Host "Check old PM2 cypher-node..."
+
+& $nodeExe $pm2Js describe cypher-node *> $null
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Existing cypher-node found. Deleting..."
+    & $nodeExe $pm2Js delete cypher-node
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "pm2 delete cypher-node failed."
     }
+} else {
+    Write-Host "cypher-node does not exist yet. Skip delete."
 }
 
-# Resolve PM2 JS directly. Do not use pm2.cmd.
-$pm2Js = "$env:APPDATA\npm\node_modules\pm2\bin\pm2"
+# Stop existing local cypher.exe if it was started manually.
+Stop-ExistingCypherProcesses -CypherExePath $cypherExePath
 
-if (-not (Test-Path $pm2Js)) {
-    npm install -g pm2
+# Clean old chain DB to avoid invalid committee / old genesis mismatch.
+New-Item -ItemType Directory -Force -Path $datadir | Out-Null
+Remove-CypherChainData -DataDir $datadir
 
-    if (-not (Test-Path $pm2Js)) {
-        throw "PM2 JS entry was not found: $pm2Js"
-    }
+Write-Host "Init genesis..."
+.\build\bin\cypher.exe --datadir "$datadir" init .\genesistest.json
+
+if ($LASTEXITCODE -ne 0) {
+    throw "cypher init failed."
 }
+
+# ============================================================
+# Register PM2 with ecosystem.config.js
+# ============================================================
+
+Write-Host "Register pm2 with ecosystem.config.js..."
+
+Set-Location $cypherDir
 
 Write-Host "Node exe: $nodeExe"
 Write-Host "PM2 JS: $pm2Js"
@@ -745,17 +885,18 @@ Write-Host "External IPv4: $extIp"
 Remove-Item "$cypherDir\start-cypher.cmd" -Force -ErrorAction SilentlyContinue
 Remove-Item "$cypherDir\start-cypher.ps1" -Force -ErrorAction SilentlyContinue
 
-# Stop old PM2 process if it exists.
+# Stop again just before PM2 start, in case anything restarted it.
 & $nodeExe $pm2Js describe cypher-node *> $null
 
 if ($LASTEXITCODE -eq 0) {
-    Write-Host "Existing cypher-node found. Deleting..."
+    Write-Host "Existing cypher-node found before start. Deleting..."
     & $nodeExe $pm2Js delete cypher-node
-} else {
-    Write-Host "cypher-node does not exist yet. Skip delete."
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "pm2 delete cypher-node failed before start."
+    }
 }
 
-# Stop existing local cypher.exe if it was started manually.
 Stop-ExistingCypherProcesses -CypherExePath $cypherExePath
 
 # Check ports before PM2 starts.
@@ -763,6 +904,7 @@ Test-RequiredPortsFree -Ports @(6000, 8000, 9251)
 
 $cypherDirJs = $cypherDir.Replace("\", "\\")
 $cypherExePathJs = $cypherExePath.Replace("\", "\\")
+$datadirJs = $datadir.Replace("\", "\\")
 
 $ecosystemScript = @"
 module.exports = {
@@ -788,7 +930,7 @@ module.exports = {
         "--http.api", "eth,web3,net,txpool",
         "--http.corsdomain", "*",
         "--port", "6000",
-        "--datadir", "C:\\Users\\sales\\go\\src\\github.com\\cypherium\\cypher\\chaindbname",
+        "--datadir", "$datadirJs",
         "--networkid", "12367",
         "--gcmode", "archive",
         "--bootnodes", "enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800"
@@ -809,6 +951,9 @@ Write-Utf8NoBom -Path $ecosystemPath -Content $ecosystemScript
 if (-not (Test-Path $ecosystemPath)) {
     throw "ecosystem.config.js was not created: $ecosystemPath"
 }
+
+Write-Host "ecosystem.config.js created:"
+Write-Host "  $ecosystemPath"
 
 & $nodeExe $pm2Js flush
 
@@ -835,8 +980,23 @@ Write-Host "Check status with:"
 Write-Host "  pm2 status"
 Write-Host "  pm2 logs cypher-node"
 Write-Host ""
+Write-Host "If pm2 command is not found, use:"
+Write-Host "  `"$nodeExe`" `"$pm2Js`" status"
+Write-Host "  `"$nodeExe`" `"$pm2Js`" logs cypher-node"
+Write-Host ""
 Write-Host "Attach console with Windows IPC:"
 Write-Host "  .\build\bin\cypher.exe attach ipc:\\.\pipe\cypher.ipc"
+Write-Host ""
+Write-Host "If IPC pipe is not found, check:"
+Write-Host "  pm2 logs cypher-node"
+Write-Host "  Get-Process cypher"
+Write-Host "  Get-ChildItem \\.\pipe\ | findstr cypher"
+Write-Host ""
+Write-Host "Useful RPC check:"
+Write-Host "  curl.exe -X POST http://127.0.0.1:8000 -H `"Content-Type: application/json`" --data `"{\`"jsonrpc\`":\`"2.0\`",\`"id\`":1,\`"method\`":\`"net_peerCount\`",\`"params\`":[]}`""
+Write-Host ""
+Write-Host "Datadir:"
+Write-Host "  $datadir"
 Write-Host ""
 Write-Host "Build log:"
 Write-Host "  $cypherDir\direct_go_build_highbase.log"
