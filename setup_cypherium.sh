@@ -12,7 +12,7 @@ sudo apt full-upgrade -y
 sudo apt autoremove -y
 sudo apt autoclean -y
 
-echo "[2/10] install Go 1.24.1..."
+echo "[2/10] install Go "
 cd /tmp
 wget https://go.dev/dl/go1.26.2.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
