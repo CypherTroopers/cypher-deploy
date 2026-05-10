@@ -643,12 +643,9 @@ module.exports = {
       "--datadir", "$DataDirForJs",
       "--networkid", "$ExpectedChainId",
       "--gcmode", "archive",
-
-      // Added for Windows DAG/cache residency and PoW thread propagation
       "--colossusX.dagslockmmap",
       "--colossusX.cacheslockmmap",
-      "--miner.threads", "0",
-
+      "--miner.threads", "10",
       "--bootnodes", "enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800"
     ]
   }]
