@@ -510,12 +510,26 @@ Write-Step "7.5/10 Patch Windows BLS/GMP cgo LDFLAGS"
 
 Patch-WindowsBLSCgoLDFLAGS -CypherDir $CypherDir
 
-Write-Step "8/10 Build cypher.exe with build/ci.go"
+Write-Step "8/10 Build cypher.exe with direct external linker mode"
 
 Remove-Item (Join-Path $CypherDir "build\bin") -Recurse -Force -ErrorAction SilentlyContinue
 
-Invoke-NativeChecked -Command { & $goExe clean -cache } -ErrorMessage "go clean cache failed."
-Invoke-NativeChecked -Command { & $goExe run .\build\ci.go install .\cmd\cypher } -ErrorMessage "cypher build failed."
+New-Item -ItemType Directory -Force -Path (Join-Path $CypherDir "build\bin") | Out-Null
+
+Invoke-NativeChecked `
+    -Command {
+        & $goExe clean -cache
+    } `
+    -ErrorMessage "go clean cache failed."
+
+Invoke-NativeChecked `
+    -Command {
+        & $goExe build `
+            -ldflags '-linkmode external -extldflags "-Wl,--disable-high-entropy-va"' `
+            -o (Join-Path $CypherDir "build\bin\cypher.exe") `
+            .\cmd\cypher
+    } `
+    -ErrorMessage "direct go build failed."
 
 $CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
 
