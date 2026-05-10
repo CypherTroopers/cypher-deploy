@@ -305,6 +305,7 @@ function Install-GopathDependencies {
         @{ Url = "https://github.com/go-sourcemap/sourcemap.git"; Directory = (Join-Path $Gopath "src\github.com\go-sourcemap\sourcemap") },
         @{ Url = "https://github.com/tklauser/go-sysconf.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\go-sysconf") },
         @{ Url = "https://github.com/tklauser/numcpus.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\numcpus") },
+        @{ Url = "https://github.com/yusufpapurcu/wmi.git"; Directory = (Join-Path $Gopath "src\github.com\yusufpapurcu\wmi") },
         @{ Url = "https://go.googlesource.com/sys"; Directory = (Join-Path $Gopath "src\golang.org\x\sys") }
     )
 
