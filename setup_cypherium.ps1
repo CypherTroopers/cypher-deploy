@@ -39,9 +39,13 @@ function Invoke-NativeChecked {
         [scriptblock]$Command,
         [string]$ErrorMessage
     )
+
+    $global:LASTEXITCODE = 0
+
     & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "$ErrorMessage ExitCode=$LASTEXITCODE"
+
+    if ($null -ne $global:LASTEXITCODE -and $global:LASTEXITCODE -ne 0) {
+        throw "$ErrorMessage ExitCode=$global:LASTEXITCODE"
     }
 }
 
