@@ -1,6 +1,6 @@
 # setup_cypherium.ps1
 # Run with Administrator PowerShell:
-# powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1
+# powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1 -GenesisFile "$env:USERPROFILE\go\src\github.com\cypherium\cypher\cmd\cypher\genesisLocal.json" -ExpectedChainId 12367
 
 #requires -RunAsAdministrator
 
@@ -8,70 +8,40 @@
 param(
     [string]$RepoUrl = "https://github.com/CypherTroopers/cypher.git",
     [string]$RepoBranch = "ecdsa_1.1_test_colossus-Xv2test",
-    [string]$Gopath = "$env:USERPROFILE\go",
+    [string]$Gopath = (Join-Path $env:USERPROFILE "go"),
     [ValidateSet("mingw64", "ucrt64")]
     [string]$MsysFlavor = "mingw64",
     [string]$DataDir = "",
     [string]$GenesisFile = "",
-    [int]$ExpectedChainId = 0,
-    [switch]$CleanData
+    [Int64]$ExpectedChainId = 0,
+    [switch]$CleanData,
+    [switch]$SkipInstall
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-Write-Host "[0/8] setup environment..."
-
-# ============================================================
-# PowerShell safety check
-# ============================================================
-
-if (-not $PSVersionTable.PSVersion) {
-    throw "This script must be run with PowerShell, not cmd.exe."
+function Write-Step {
+    param([string]$Message)
+    Write-Host ""
+    Write-Host "==> $Message"
 }
 
-# ============================================================
-# Paths and basic environment
-# ============================================================
-
-$env:GOPATH = $Gopath
-$env:GO111MODULE = "off"
-$env:CGO_ENABLED = "1"
-
-$CypherRoot = Join-Path $env:GOPATH "src\github.com\cypherium"
-$CypherDir = Join-Path $CypherRoot "cypher"
-$MsysRoot = "C:\msys64"
-$MsysBin = Join-Path $MsysRoot "$MsysFlavor\bin"
-$MsysBash = Join-Path $MsysRoot "usr\bin\bash.exe"
-
-if ([string]::IsNullOrWhiteSpace($DataDir)) {
-    $DataDir = Join-Path $CypherDir "chaindbname"
-}
-
-function Add-Path {
+function Add-ProcessPath {
     param([string]$PathToAdd)
-
-    if (-not (Test-Path $PathToAdd)) {
-        return
-    }
-
-    $currentEntries = $env:Path -split ';'
-    if ($currentEntries -notcontains $PathToAdd) {
+    if ((Test-Path -LiteralPath $PathToAdd) -and (($env:Path -split ';') -notcontains $PathToAdd)) {
         $env:Path = "$PathToAdd;$env:Path"
     }
+}
 
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $userEntries = if ([string]::IsNullOrWhiteSpace($userPath)) {
-        @()
-    } else {
-        $userPath -split ';'
-    }
-
-    if ($userEntries -notcontains $PathToAdd) {
-        if ([string]::IsNullOrWhiteSpace($userPath)) {
-            [Environment]::SetEnvironmentVariable("Path", $PathToAdd, "User")
-        } else {
-            [Environment]::SetEnvironmentVariable("Path", "$PathToAdd;$userPath", "User")
-        }
+function Invoke-NativeChecked {
+    param(
+        [scriptblock]$Command,
+        [string]$ErrorMessage
+    )
+    & $Command
+    if ($LASTEXITCODE -ne 0) {
+        throw "$ErrorMessage ExitCode=$LASTEXITCODE"
     }
 }
 
@@ -83,389 +53,268 @@ function Install-WingetPackage {
         [string[]]$Paths = @()
     )
 
-    foreach ($Command in $Commands) {
-        if (Get-Command $Command -ErrorAction SilentlyContinue) {
-            Write-Host "$Name already installed. Found command: $Command"
+    foreach ($command in $Commands) {
+        if (Get-Command $command -ErrorAction SilentlyContinue) {
+            Write-Host "$Name already installed. Found command: $command"
             return
         }
     }
-
-    foreach ($Path in $Paths) {
-        if (Test-Path $Path) {
-            Write-Host "$Name already installed. Found path: $Path"
+    foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path) {
+            Write-Host "$Name already installed. Found path: $path"
             return
         }
     }
-
+    if ($SkipInstall) {
+        throw "$Name was not found and -SkipInstall was specified."
+    }
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw "winget was not found. Please update App Installer from Microsoft Store."
+        throw "winget was not found. Update App Installer from Microsoft Store or rerun with -SkipInstall after installing prerequisites manually."
     }
 
-    foreach ($Id in $Ids) {
-        Write-Host "Installing $Name using winget id: $Id"
-        winget install --id $Id -e --accept-source-agreements --accept-package-agreements
-
-        foreach ($Command in $Commands) {
-            if (Get-Command $Command -ErrorAction SilentlyContinue) {
-                Write-Host "$Name installed successfully. Found command: $Command"
-                return
-            }
+    foreach ($id in $Ids) {
+        Write-Host "Installing $Name with winget package id: $id"
+        & winget install --id $id -e --accept-source-agreements --accept-package-agreements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "WARNING: winget returned $LASTEXITCODE for $id. Trying the next candidate if available."
+            continue
         }
-
-        foreach ($Path in $Paths) {
-            if (Test-Path $Path) {
-                Write-Host "$Name installed successfully. Found path: $Path"
-                return
-            }
+        foreach ($path in $Paths) {
+            if (Test-Path -LiteralPath $path) { return }
         }
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "$Name installed or already exists."
-            return
+        foreach ($command in $Commands) {
+            if (Get-Command $command -ErrorAction SilentlyContinue) { return }
         }
-
-        Write-Host "WARNING: winget returned exit code $LASTEXITCODE for $Id. Trying next candidate if available..."
+        return
     }
 
     throw "Failed to install or detect $Name."
 }
 
-function Require-Command {
-    param([string]$Command)
-
-    if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
-        throw "Required command not found: $Command"
-    }
-}
-
 function Get-GoBinPath {
-    $preferredGo = "C:\Program Files\Go\bin\go.exe"
-
-    if (Test-Path $preferredGo) {
-        return Split-Path $preferredGo -Parent
+    $preferred = "C:\Program Files\Go\bin\go.exe"
+    if (Test-Path -LiteralPath $preferred) {
+        return Split-Path -Parent $preferred
     }
-
-    $goCommand = Get-Command go.exe -ErrorAction Stop
-    return Split-Path $goCommand.Source -Parent
+    $cmd = Get-Command go.exe -ErrorAction Stop
+    return Split-Path -Parent $cmd.Source
 }
 
 function Assert-GoVersionSupported {
     param([string]$GoExe)
-
-    $goVersion = & $GoExe version
-    Write-Host $goVersion
-
-    if ($goVersion -notmatch 'go(\d+)\.(\d+)') {
-        throw "Could not parse Go version: $goVersion"
+    $version = & $GoExe version
+    Write-Host $version
+    if ($version -notmatch 'go(\d+)\.(\d+)') {
+        throw "Could not parse Go version: $version"
     }
-
     $major = [int]$Matches[1]
     $minor = [int]$Matches[2]
-
     if (($major -lt 1) -or (($major -eq 1) -and ($minor -lt 13))) {
-        throw "Go 1.13 or newer is required. Found: $goVersion"
+        throw "Go 1.13 or newer is required by build/ci.go. Found: $version"
     }
 }
 
-function Set-GoEnvironment {
-    param([string]$GoBin)
-
-    if (-not (Test-Path "$GoBin\go.exe")) {
-        throw "go.exe not found: $GoBin\go.exe"
+function Copy-BLSWindowsLibraries {
+    param([string]$CypherDir)
+    $src = Join-Path $CypherDir "crypto\bls\lib\win"
+    $dst = Join-Path $CypherDir "crypto\bls\lib"
+    if (-not (Test-Path -LiteralPath $src)) {
+        throw "Windows BLS static library directory not found: $src"
     }
-
-    $goRoot = Split-Path $GoBin -Parent
-    if (-not (Test-Path "$goRoot\src\runtime\runtime.go")) {
-        throw "GOROOT is not valid: $goRoot"
+    $libs = Get-ChildItem -LiteralPath $src -Filter "*.a"
+    if ($libs.Count -eq 0) {
+        throw "No Windows BLS static libraries were found in: $src"
     }
-
-    $env:GOROOT = $goRoot
-    $env:GOPATH = $Gopath
-    $env:GO111MODULE = "off"
-    $env:CGO_ENABLED = "1"
-
-    [Environment]::SetEnvironmentVariable("GOROOT", $env:GOROOT, "User")
-    [Environment]::SetEnvironmentVariable("GOPATH", $env:GOPATH, "User")
-    [Environment]::SetEnvironmentVariable("GO111MODULE", "off", "User")
-    [Environment]::SetEnvironmentVariable("CGO_ENABLED", "1", "User")
-
-    Add-Path $GoBin
-
-    Write-Host "Go environment:"
-    Write-Host "  GOROOT=$env:GOROOT"
-    Write-Host "  GOPATH=$env:GOPATH"
-    Write-Host "  GO111MODULE=$env:GO111MODULE"
-    Write-Host "  CGO_ENABLED=$env:CGO_ENABLED"
+    foreach ($lib in $libs) {
+        Copy-Item -LiteralPath $lib.FullName -Destination (Join-Path $dst $lib.Name) -Force
+        Write-Host "Copied BLS static library: $($lib.Name)"
+    }
 }
 
-function Invoke-CheckedNativeCommand {
+function Get-ImportedDllNames {
     param(
-        [scriptblock]$Command,
-        [string]$ErrorMessage
+        [string]$ObjdumpExe,
+        [string]$BinaryPath
     )
+    if (-not (Test-Path -LiteralPath $ObjdumpExe)) { return @() }
+    $lines = & $ObjdumpExe -p $BinaryPath 2>$null | Select-String "DLL Name:"
+    return @($lines | ForEach-Object { ($_.Line -replace '^\s*DLL Name:\s*', '').Trim() } | Where-Object { $_ })
+}
 
-    & $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw $ErrorMessage
+function Copy-DependentDlls {
+    param(
+        [string]$BinaryPath,
+        [string]$MsysBin,
+        [string]$Destination
+    )
+    $objdump = Join-Path $MsysBin "objdump.exe"
+    if (-not (Test-Path -LiteralPath $objdump)) {
+        Write-Host "WARNING: objdump.exe was not found. Falling back to known MinGW runtime DLL names."
+        $fallback = @("libcrypto-3-x64.dll", "libgmp-10.dll", "libgmpxx-4.dll", "libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll", "zlib1.dll", "libzstd.dll")
+        foreach ($dll in $fallback) {
+            $src = Join-Path $MsysBin $dll
+            if (Test-Path -LiteralPath $src) {
+                Copy-Item -LiteralPath $src -Destination (Join-Path $Destination $dll) -Force
+                Write-Host "Copied DLL: $dll"
+            }
+        }
+        return
+    }
+
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    $seen = @{}
+    foreach ($dll in (Get-ImportedDllNames -ObjdumpExe $objdump -BinaryPath $BinaryPath)) {
+        $queue.Enqueue($dll)
+    }
+
+    while ($queue.Count -gt 0) {
+        $dll = $queue.Dequeue()
+        if ($seen.ContainsKey($dll)) { continue }
+        $seen[$dll] = $true
+
+        $src = Join-Path $MsysBin $dll
+        if (-not (Test-Path -LiteralPath $src)) {
+            Write-Host "Skipping system or non-MSYS DLL: $dll"
+            continue
+        }
+
+        $dst = Join-Path $Destination $dll
+        Copy-Item -LiteralPath $src -Destination $dst -Force
+        Write-Host "Copied DLL: $dll"
+
+        foreach ($child in (Get-ImportedDllNames -ObjdumpExe $objdump -BinaryPath $src)) {
+            if (-not $seen.ContainsKey($child)) {
+                $queue.Enqueue($child)
+            }
+        }
     }
 }
 
-# ============================================================
-# Admin check
-# ============================================================
-
+Write-Step "0/8 Validate PowerShell and administrator context"
+if (-not $PSVersionTable.PSVersion) {
+    throw "This script must be run with PowerShell, not cmd.exe."
+}
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-
-if (-not $isAdmin) {
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "Please run this script as Administrator PowerShell."
 }
 
-# ============================================================
-# [1/8] Install required Windows tools
-# ============================================================
+$MsysRoot = "C:\msys64"
+$MsysBin = Join-Path $MsysRoot "$MsysFlavor\bin"
+$MsysBash = Join-Path $MsysRoot "usr\bin\bash.exe"
+$CypherRoot = Join-Path $Gopath "src\github.com\cypherium"
+$CypherDir = Join-Path $CypherRoot "cypher"
+if ([string]::IsNullOrWhiteSpace($DataDir)) {
+    $DataDir = Join-Path $env:LOCALAPPDATA "Cypherium\cypher"
+}
 
-Write-Host "[1/8] install required Windows tools..."
+Write-Step "1/8 Install or detect required Windows tools"
+Install-WingetPackage -Ids @("Git.Git") -Name "Git" -Commands @("git.exe") -Paths @("C:\Program Files\Git\cmd\git.exe")
+Install-WingetPackage -Ids @("GoLang.Go") -Name "Go" -Commands @("go.exe") -Paths @("C:\Program Files\Go\bin\go.exe")
+Install-WingetPackage -Ids @("MSYS2.MSYS2") -Name "MSYS2" -Paths @($MsysBash)
 
-Install-WingetPackage `
-    -Ids @("Git.Git") `
-    -Name "Git" `
-    -Commands @("git.exe") `
-    -Paths @("C:\Program Files\Git\cmd\git.exe", "C:\Program Files\Git\bin\git.exe")
-
-Install-WingetPackage `
-    -Ids @("GoLang.Go") `
-    -Name "Go" `
-    -Commands @("go.exe") `
-    -Paths @("C:\Program Files\Go\bin\go.exe")
-
-Install-WingetPackage `
-    -Ids @("MSYS2.MSYS2") `
-    -Name "MSYS2" `
-    -Commands @() `
-    -Paths @("C:\msys64\usr\bin\bash.exe")
-
-Add-Path "C:\Program Files\Git\cmd"
-Add-Path "C:\Program Files\Git\bin"
-Add-Path "C:\Program Files\Go\bin"
-Add-Path $MsysBin
-Add-Path "C:\msys64\usr\bin"
-
-$env:Path = "C:\Program Files\Go\bin;$MsysBin;C:\msys64\usr\bin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;$env:Path"
-
-Require-Command git
-Require-Command go
+Add-ProcessPath "C:\Program Files\Git\cmd"
+Add-ProcessPath "C:\Program Files\Git\bin"
+Add-ProcessPath "C:\Program Files\Go\bin"
+Add-ProcessPath $MsysBin
 
 $goBin = Get-GoBinPath
-Set-GoEnvironment -GoBin $goBin
 $goExe = Join-Path $goBin "go.exe"
+Add-ProcessPath $goBin
 Assert-GoVersionSupported -GoExe $goExe
+Invoke-NativeChecked -Command { & git --version } -ErrorMessage "git check failed."
 
-git --version
-
-# ============================================================
-# [2/8] Install MSYS2 CGO dependencies
-# ============================================================
-
-Write-Host "[2/8] install MSYS2 CGO dependencies..."
-
-if (-not (Test-Path $MsysBash)) {
+Write-Step "2/8 Install MSYS2 CGO dependencies"
+if (-not (Test-Path -LiteralPath $MsysBash)) {
     throw "MSYS2 bash not found: $MsysBash"
 }
-
 $mingwPrefix = if ($MsysFlavor -eq "ucrt64") { "mingw-w64-ucrt-x86_64" } else { "mingw-w64-x86_64" }
+Invoke-NativeChecked -Command { & $MsysBash -lc "pacman -Syuu --noconfirm" } -ErrorMessage "pacman -Syuu failed. Close all MSYS2 terminals and rerun this script."
+Invoke-NativeChecked -Command { & $MsysBash -lc "pacman -Suu --noconfirm" } -ErrorMessage "pacman -Suu failed. Close all MSYS2 terminals and rerun this script."
+Invoke-NativeChecked -Command { & $MsysBash -lc "pacman -S --needed --noconfirm ${mingwPrefix}-gcc ${mingwPrefix}-binutils ${mingwPrefix}-openssl ${mingwPrefix}-gmp" } -ErrorMessage "MSYS2 dependency install failed."
 
-Invoke-CheckedNativeCommand `
-    -Command { & $MsysBash -lc "pacman -Syuu --noconfirm" } `
-    -ErrorMessage "pacman -Syuu failed. Close all MSYS2 terminals and rerun this script."
+$cc = Join-Path $MsysBin "gcc.exe"
+$cxx = Join-Path $MsysBin "g++.exe"
+if (-not (Test-Path -LiteralPath $cc)) { throw "gcc.exe not found: $cc" }
+if (-not (Test-Path -LiteralPath $cxx)) { throw "g++.exe not found: $cxx" }
+Invoke-NativeChecked -Command { & $cc --version } -ErrorMessage "gcc check failed."
 
-Invoke-CheckedNativeCommand `
-    -Command { & $MsysBash -lc "pacman -Suu --noconfirm" } `
-    -ErrorMessage "pacman -Suu failed. Close all MSYS2 terminals and rerun this script."
-
-Invoke-CheckedNativeCommand `
-    -Command { & $MsysBash -lc "pacman -S --needed --noconfirm base-devel git make pkgconf ${mingwPrefix}-gcc ${mingwPrefix}-openssl ${mingwPrefix}-gmp" } `
-    -ErrorMessage "MSYS2 dependency install failed."
-
-if (-not (Test-Path (Join-Path $MsysBin "gcc.exe"))) {
-    throw "gcc.exe not found in MSYS2 $MsysFlavor bin: $MsysBin"
-}
-
-$env:CC = Join-Path $MsysBin "gcc.exe"
-$env:CXX = Join-Path $MsysBin "g++.exe"
-
-& $env:CC --version
-
-# ============================================================
-# [3/8] Clone cypher under GOPATH import path
-# ============================================================
-
-Write-Host "[3/8] clone cypher under GOPATH import path..."
-
+Write-Step "3/8 Clone cypher under the GOPATH import path used by the codebase"
 New-Item -ItemType Directory -Force -Path $CypherRoot | Out-Null
-
-if (-not (Test-Path $CypherDir)) {
-    git clone $RepoUrl $CypherDir
+if (-not (Test-Path -LiteralPath (Join-Path $CypherDir ".git"))) {
+    Invoke-NativeChecked -Command { & git clone $RepoUrl $CypherDir } -ErrorMessage "git clone failed."
 } else {
-    Write-Host "Already exists: $CypherDir"
+    Write-Host "Repository already exists: $CypherDir"
 }
-
 Set-Location $CypherDir
-
-git fetch --all --tags
-
+Invoke-NativeChecked -Command { & git fetch --all --tags } -ErrorMessage "git fetch failed."
 if (-not [string]::IsNullOrWhiteSpace($RepoBranch)) {
-    git checkout $RepoBranch
+    Invoke-NativeChecked -Command { & git checkout $RepoBranch } -ErrorMessage "git checkout failed for branch/ref: $RepoBranch"
 }
-
-Write-Host "Repository:"
-Write-Host "  $CypherDir"
 Write-Host "Git branch:"
-git branch --show-current
+& git branch --show-current
 Write-Host "Git commit:"
-git rev-parse HEAD
+& git rev-parse HEAD
 
-# ============================================================
-# [4/8] Disable Go modules and enable CGO
-# ============================================================
-
-Write-Host "[4/8] configure Go GOPATH mode..."
-
+Write-Step "4/8 Configure GOPATH-mode Go and CGO for this process"
+$env:GOROOT = Split-Path -Parent $goBin
+$env:GOPATH = $Gopath
 $env:GO111MODULE = "off"
 $env:CGO_ENABLED = "1"
-$env:GOPATH = $Gopath
-
-Write-Host "GO111MODULE=$(go env GO111MODULE)"
-Write-Host "CGO_ENABLED=$(go env CGO_ENABLED)"
-Write-Host "GOPATH=$(go env GOPATH)"
-
-# ============================================================
-# [5/8] Copy Windows BLS libraries
-# ============================================================
-
-Write-Host "[5/8] copy Windows BLS libraries..."
-
-Set-Location $CypherDir
-
-if (Test-Path ".\crypto\bls\lib\win") {
-    Copy-Item ".\crypto\bls\lib\win\*.a" ".\crypto\bls\lib\" -Force
-    Write-Host "Copied Windows BLS .a files into .\crypto\bls\lib"
-} else {
-    Write-Host "WARNING: .\crypto\bls\lib\win was not found. Continuing because .\crypto\bls\lib may already contain the required libraries."
-}
-
-# ============================================================
-# [6/8] Build cypher via build/ci.go install
-# ============================================================
-
-Write-Host "[6/8] build cypher with go run .\build\ci.go install .\cmd\cypher..."
-
-Set-Location $CypherDir
-
-$env:Path = "$goBin;$MsysBin;C:\msys64\usr\bin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;$env:Path"
-$env:CC = Join-Path $MsysBin "gcc.exe"
-$env:CXX = Join-Path $MsysBin "g++.exe"
+$env:CC = $cc
+$env:CXX = $cxx
 $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_LDFLAGS_ALLOW = ".*"
+$env:Path = "$goBin;$MsysBin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;$env:Path"
+Write-Host "GOROOT=$env:GOROOT"
+Write-Host "GOPATH=$env:GOPATH"
+Write-Host "GO111MODULE=$(go env GO111MODULE)"
+Write-Host "CGO_ENABLED=$(go env CGO_ENABLED)"
+Write-Host "CC=$env:CC"
 
-Remove-Item ".\build\bin" -Recurse -Force -ErrorAction SilentlyContinue
+Write-Step "5/8 Copy Windows BLS static libraries into the cgo library directory"
+Copy-BLSWindowsLibraries -CypherDir $CypherDir
 
-Invoke-CheckedNativeCommand `
-    -Command { & $goExe run .\build\ci.go install .\cmd\cypher } `
-    -ErrorMessage "cypher build failed. The command was: go run .\build\ci.go install .\cmd\cypher"
-
+Write-Step "6/8 Build cypher.exe with build/ci.go"
+Remove-Item (Join-Path $CypherDir "build\bin") -Recurse -Force -ErrorAction SilentlyContinue
+Invoke-NativeChecked -Command { & $goExe run .\build\ci.go install .\cmd\cypher } -ErrorMessage "cypher build failed."
 $CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
-
-if (-not (Test-Path $CypherExe)) {
-    throw "cypher.exe was not created at expected build script output path: $CypherExe"
+if (-not (Test-Path -LiteralPath $CypherExe)) {
+    throw "cypher.exe was not created at expected path: $CypherExe"
 }
+Get-Item -LiteralPath $CypherExe
 
-Write-Host "cypher.exe created:"
-Get-Item $CypherExe
+Write-Step "7/8 Copy MinGW runtime DLLs required by cypher.exe and verify binary"
+Copy-DependentDlls -BinaryPath $CypherExe -MsysBin $MsysBin -Destination (Join-Path $CypherDir "build\bin")
+$binPath = Join-Path $CypherDir "build\bin"
+$env:Path = "$binPath;$MsysBin;$goBin;$env:Path"
+Invoke-NativeChecked -Command { & $CypherExe version } -ErrorMessage "cypher.exe version check failed."
+Invoke-NativeChecked -Command { & $CypherExe help } -ErrorMessage "cypher.exe help check failed."
 
-# ============================================================
-# [7/8] Copy MSYS2 runtime DLLs and verify binary
-# ============================================================
-
-Write-Host "[7/8] copy runtime DLLs and verify cypher.exe..."
-
-$dlls = @(
-    "libcrypto-3-x64.dll",
-    "libssl-3-x64.dll",
-    "libgmp-10.dll",
-    "libgmpxx-4.dll",
-    "libstdc++-6.dll",
-    "libgcc_s_seh-1.dll",
-    "libwinpthread-1.dll",
-    "libzstd.dll",
-    "zlib1.dll"
-)
-
-foreach ($dll in $dlls) {
-    $src = Join-Path $MsysBin $dll
-
-    if (Test-Path $src) {
-        Copy-Item $src ".\build\bin\" -Force
-        Write-Host "Copied: $dll"
-    } else {
-        Write-Host "WARNING: DLL not found in $MsysBin: $dll"
-    }
-}
-
-if (Test-Path (Join-Path $MsysBin "objdump.exe")) {
-    Write-Host "Required DLLs:"
-    & (Join-Path $MsysBin "objdump.exe") -p $CypherExe | Select-String "DLL Name"
-} else {
-    Write-Host "WARNING: objdump.exe was not found in $MsysBin. Skipping DLL dependency listing."
-}
-
-$env:Path = "$CypherDir\build\bin;$MsysBin;C:\msys64\usr\bin;$goBin;$env:Path"
-
-& $CypherExe version
-& $CypherExe help
-
-# ============================================================
-# [8/8] Create data directory and initialize genesis
-# ============================================================
-
-Write-Host "[8/8] create data directory and initialize genesis..."
-
-Set-Location $CypherDir
+Write-Step "8/8 Create data directory and initialize genesis"
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
-
 if ([string]::IsNullOrWhiteSpace($GenesisFile)) {
-    throw "Pass -GenesisFile explicitly. Example: -GenesisFile `"$CypherDir\cmd\cypher\genesisLocal.json`""
+    throw "Pass -GenesisFile explicitly. Example: -GenesisFile `"$CypherDir\cmd\cypher\genesisLocal.json`" -ExpectedChainId 12367"
 }
-
-if (-not (Test-Path $GenesisFile)) {
+if (-not (Test-Path -LiteralPath $GenesisFile)) {
     throw "Genesis file not found: $GenesisFile"
 }
-
-$genesisJson = Get-Content $GenesisFile -Raw | ConvertFrom-Json
+$genesisJson = Get-Content -LiteralPath $GenesisFile -Raw | ConvertFrom-Json
 $chainId = $genesisJson.config.chainId
-
 if ($null -eq $chainId) {
     throw "Genesis chainId was not found at config.chainId. GenesisFile=$GenesisFile"
 }
-
-if (($ExpectedChainId -ne 0) -and ([int64]$chainId -ne $ExpectedChainId)) {
+if (($ExpectedChainId -ne 0) -and ([Int64]$chainId -ne $ExpectedChainId)) {
     throw "Unexpected genesis chainId. Expected $ExpectedChainId, actual $chainId. GenesisFile=$GenesisFile"
 }
-
-Write-Host "Cypher dir:"
-Write-Host "  $CypherDir"
-Write-Host "Data dir:"
-Write-Host "  $DataDir"
-Write-Host "Genesis file:"
-Write-Host "  $GenesisFile"
-Write-Host "Genesis chainId:"
-Write-Host "  $chainId"
-Write-Host "Genesis SHA256:"
-Get-FileHash $GenesisFile -Algorithm SHA256 | Format-List
+Write-Host "Cypher dir: $CypherDir"
+Write-Host "Data dir: $DataDir"
+Write-Host "Genesis file: $GenesisFile"
+Write-Host "Genesis chainId: $chainId"
+Get-FileHash -LiteralPath $GenesisFile -Algorithm SHA256 | Format-List
 
 if ($CleanData) {
     Write-Host "CleanData was specified. Removing old chain database files but preserving keystore."
-
     $cleanTargets = @(
         (Join-Path $DataDir "chaindata"),
         (Join-Path $DataDir "nodes"),
@@ -476,20 +325,18 @@ if ($CleanData) {
         (Join-Path $DataDir "cypher\nodes"),
         (Join-Path $DataDir "cypher\nodekey"),
         (Join-Path $DataDir "cypher\transactions.rlp"),
-        (Join-Path $DataDir "cypher\triecache")
+        (Join-Path $DataDir "cypher\triecache"),
+        (Join-Path $DataDir "cypher\colossusX")
     )
-
     foreach ($target in $cleanTargets) {
-        if (Test-Path $target) {
-            Remove-Item $target -Recurse -Force
+        if (Test-Path -LiteralPath $target) {
+            Remove-Item -LiteralPath $target -Recurse -Force
             Write-Host "Removed: $target"
         }
     }
 }
 
-Invoke-CheckedNativeCommand `
-    -Command { & $CypherExe --datadir $DataDir init $GenesisFile } `
-    -ErrorMessage "cypher genesis init failed."
+Invoke-NativeChecked -Command { & $CypherExe --datadir $DataDir init $GenesisFile } -ErrorMessage "cypher genesis init failed."
 
 Write-Host ""
 Write-Host "Done. Built binary:"
@@ -498,8 +345,7 @@ Write-Host "Data directory:"
 Write-Host "  $DataDir"
 Write-Host ""
 Write-Host "Example local start command:"
-Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --http --http.addr 127.0.0.1 --ws --ws.addr 127.0.0.1 console"
+Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --http --http.addr 0.0.0.0 --ws --ws.addr 0.0.0.0 console"
 Write-Host ""
 Write-Host "Example local start command with explicit P2P/RNet/RPC ports:"
-Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --rnetport 7200 --port 6000 --http --http.addr 127.0.0.1 --http.port 8000 --ws --ws.addr 127.0.0.1 --ws.port 9251 console"
-exit 0
+Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --rnetport 7200 --port 6000 --http --http.addr 0.0.0.0 --http.port 8000 --ws --ws.addr 0.0.0.0 --ws.port 9251 console"
