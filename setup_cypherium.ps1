@@ -648,8 +648,13 @@ if (-not $PowerShellCommand) {
 
 $PowerShellExe = $PowerShellCommand.Source
 
-& pm2 delete cypher-node 2>$null
+try {
+    & pm2 delete cypher-node 2>$null
+} catch {
+    Write-Host "cypher-node was not registered in PM2. Continuing..."
+}
 $global:LASTEXITCODE = 0
+$Error.Clear()
 
 Invoke-NativeChecked -Command { & pm2 start $PowerShellExe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File $StartScript } -ErrorMessage "pm2 start failed."
 Invoke-NativeChecked -Command { & pm2 save } -ErrorMessage "pm2 save failed."
