@@ -1,4 +1,3 @@
-# setup_cypherium.ps1
 # Run with Administrator PowerShell:
 # powershell -ExecutionPolicy Bypass -File .\setup_cypherium.ps1 -GenesisFile "$env:USERPROFILE\go\src\github.com\cypherium\cypher\cmd\cypher\genesisLocal.json" -ExpectedChainId 12367
 
