@@ -161,15 +161,44 @@ function Copy-BLSWindowsLibraries {
         throw "Windows BLS static library directory not found: $src"
     }
 
-    $libs = Get-ChildItem -LiteralPath $src -Filter "*.a"
+    Copy-Item -LiteralPath (Join-Path $src "*") -Destination $dst -Recurse -Force
+    Write-Host "Copied Windows BLS libraries from: $src"
+}
 
-    if ($libs.Count -eq 0) {
-        throw "No Windows BLS static libraries were found in: $src"
+function Patch-WindowsBLSCgoLDFLAGS {
+    param([string]$CypherDir)
+
+    $blsDir = Join-Path $CypherDir "crypto\bls"
+
+    if (-not (Test-Path -LiteralPath $blsDir)) {
+        throw "BLS source directory not found: $blsDir"
     }
 
-    foreach ($lib in $libs) {
-        Copy-Item -LiteralPath $lib.FullName -Destination (Join-Path $dst $lib.Name) -Force
-        Write-Host "Copied BLS static library: $($lib.Name)"
+    $files = Get-ChildItem -LiteralPath $blsDir -Filter "*.go" -Recurse
+    $patched = 0
+
+    foreach ($file in $files) {
+        $content = Get-Content -LiteralPath $file.FullName -Raw
+        $newContent = $content
+
+        # Windows BLS archives reference __imp___gmpz_* symbols.
+        # That means DLL import GMP is expected.
+        # Do not force static GMP with -Wl,-Bstatic around -lgmpxx/-lgmp.
+        $newContent = $newContent `
+            -replace '\s+-Wl,-Bstatic\s+-lgmpxx\s+-lgmp\s+-lstdc\+\+\s+-Wl,-Bdynamic', ' -lgmpxx -lgmp -lstdc++' `
+            -replace '\s+-Wl,-Bstatic\s+-lgmp\s+-lstdc\+\+\s+-Wl,-Bdynamic', ' -lgmp -lstdc++' `
+            -replace '\s+-Wl,-Bstatic\s+-lgmpxx\s+-lgmp\s+-lstdc\+\+', ' -lgmpxx -lgmp -lstdc++' `
+            -replace '\s+-Wl,-Bstatic\s+-lgmp\s+-lstdc\+\+', ' -lgmp -lstdc++'
+
+        if ($newContent -ne $content) {
+            Set-Content -LiteralPath $file.FullName -Value $newContent -NoNewline
+            Write-Host "Patched Windows BLS cgo LDFLAGS: $($file.FullName)"
+            $patched++
+        }
+    }
+
+    if ($patched -eq 0) {
+        Write-Host "WARNING: No Windows BLS cgo LDFLAGS were patched. Checking files manually may be required."
     }
 }
 
@@ -205,9 +234,7 @@ function Copy-DependentDlls {
             "libgmpxx-4.dll",
             "libstdc++-6.dll",
             "libgcc_s_seh-1.dll",
-            "libwinpthread-1.dll",
-            "zlib1.dll",
-            "libzstd.dll"
+            "libwinpthread-1.dll"
         )
 
         foreach ($dll in $fallback) {
@@ -458,6 +485,9 @@ $env:CGO_CFLAGS_ALLOW = ".*"
 $env:CGO_LDFLAGS_ALLOW = ".*"
 $env:Path = "$goBin;$MsysBin;C:\Program Files\Git\cmd;C:\Program Files\Git\bin;C:\Program Files\nodejs;$(Join-Path $env:APPDATA 'npm');$env:Path"
 
+Remove-Item Env:CGO_LDFLAGS -ErrorAction SilentlyContinue
+Remove-Item Env:CGO_CFLAGS -ErrorAction SilentlyContinue
+
 Write-Host "GOROOT=$env:GOROOT"
 Write-Host "GOPATH=$env:GOPATH"
 Write-Host "GO111MODULE=$(go env GO111MODULE)"
@@ -476,10 +506,15 @@ Write-Step "7/10 Patch dependencies"
 
 Patch-CypherDependencies
 
+Write-Step "7.5/10 Patch Windows BLS/GMP cgo LDFLAGS"
+
+Patch-WindowsBLSCgoLDFLAGS -CypherDir $CypherDir
+
 Write-Step "8/10 Build cypher.exe with build/ci.go"
 
 Remove-Item (Join-Path $CypherDir "build\bin") -Recurse -Force -ErrorAction SilentlyContinue
 
+Invoke-NativeChecked -Command { & $goExe clean -cache } -ErrorMessage "go clean cache failed."
 Invoke-NativeChecked -Command { & $goExe run .\build\ci.go install .\cmd\cypher } -ErrorMessage "cypher build failed."
 
 $CypherExe = Join-Path $CypherDir "build\bin\cypher.exe"
