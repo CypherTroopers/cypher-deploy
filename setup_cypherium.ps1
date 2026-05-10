@@ -606,47 +606,44 @@ if ($CleanData) {
 
 Invoke-NativeChecked -Command { & $CypherExe --datadir $DataDir init $GenesisFile } -ErrorMessage "cypher genesis init failed."
 
-$StartScript = Join-Path $CypherDir "start-cypher.ps1"
+$ExternalIp = (Invoke-RestMethod -Uri "https://ipv4.icanhazip.com" -TimeoutSec 10).Trim()
 
-$startScriptContent = @"
-Set-StrictMode -Version Latest
-`$ErrorActionPreference = "Stop"
+$EcosystemConfig = Join-Path $CypherDir "ecosystem.config.js"
 
-Set-Location `$PSScriptRoot
+$CypherExeForJs = ($CypherExe -replace '\\', '/')
+$DataDirForJs = ($DataDir -replace '\\', '/')
 
-`$ExternalIp = (Invoke-RestMethod -Uri "https://ipv4.icanhazip.com" -TimeoutSec 10).Trim()
-
-& .\build\bin\cypher.exe ``
-  --verbosity 4 ``
-  --rnetport 7200 ``
-  --syncmode full ``
-  --nat "extip:`$ExternalIp" ``
-  --ws ``
-  --ws.addr 0.0.0.0 ``
-  --ws.port 9251 ``
-  --ws.origins "*" ``
-  --metrics ``
-  --http ``
-  --http.addr 0.0.0.0 ``
-  --http.port 8000 ``
-  --http.api eth,web3,net,txpool ``
-  --http.corsdomain "*" ``
-  --port 6000 ``
-  --datadir "$DataDir" ``
-  --networkid $ExpectedChainId ``
-  --gcmode archive ``
-  --bootnodes enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800
+$ecosystemContent = @"
+module.exports = {
+  apps: [{
+    name: "cypher-node",
+    script: "$CypherExeForJs",
+    args: [
+      "--verbosity", "4",
+      "--rnetport", "7200",
+      "--syncmode", "full",
+      "--nat", "extip:$ExternalIp",
+      "--ws",
+      "--ws.addr", "0.0.0.0",
+      "--ws.port", "9251",
+      "--ws.origins", "*",
+      "--metrics",
+      "--http",
+      "--http.addr", "0.0.0.0",
+      "--http.port", "8000",
+      "--http.api", "eth,web3,net,txpool",
+      "--http.corsdomain", "*",
+      "--port", "6000",
+      "--datadir", "$DataDirForJs",
+      "--networkid", "$ExpectedChainId",
+      "--gcmode", "archive",
+      "--bootnodes", "enode://fe37c100a751e024f9bce73764b7360edf7690619e6e0bf2473f876834adf200feb68f17562a6eea77f263e947744978269db295c2ece9bfc24ad2be14eb69f1@161.97.184.220:6800"
+    ]
+  }]
+}
 "@
 
-Set-Content -LiteralPath $StartScript -Value $startScriptContent -Encoding UTF8
-
-$PowerShellCommand = Get-Command pwsh.exe -ErrorAction SilentlyContinue
-
-if (-not $PowerShellCommand) {
-    $PowerShellCommand = Get-Command powershell.exe -ErrorAction Stop
-}
-
-$PowerShellExe = $PowerShellCommand.Source
+Set-Content -LiteralPath $EcosystemConfig -Value $ecosystemContent -Encoding ASCII
 
 try {
     & pm2 delete cypher-node 2>$null
@@ -658,7 +655,7 @@ $Error.Clear()
 
 Invoke-NativeChecked `
     -Command {
-        & pm2 start powershell.exe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File $StartScript
+        & pm2 start $EcosystemConfig
     } `
     -ErrorMessage "pm2 start failed."
 
