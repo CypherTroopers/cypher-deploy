@@ -12,7 +12,9 @@ param(
     [ValidateSet("mingw64", "ucrt64")]
     [string]$MsysFlavor = "mingw64",
     [string]$DataDir = "",
-    [string]$GenesisFile = ""
+    [string]$GenesisFile = "",
+    [int]$ExpectedChainId = 0,
+    [switch]$CleanData
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,28 +44,33 @@ $MsysBin = Join-Path $MsysRoot "$MsysFlavor\bin"
 $MsysBash = Join-Path $MsysRoot "usr\bin\bash.exe"
 
 if ([string]::IsNullOrWhiteSpace($DataDir)) {
-    $DataDir = Join-Path $CypherDir "chaindata"
+    $DataDir = Join-Path $CypherDir "chaindbname"
 }
 
 function Add-Path {
     param([string]$PathToAdd)
 
-    if (Test-Path $PathToAdd) {
-        if ($env:Path -notlike "*$PathToAdd*") {
-            $env:Path = "$PathToAdd;$env:Path"
-        }
+    if (-not (Test-Path $PathToAdd)) {
+        return
+    }
 
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $currentEntries = $env:Path -split ';'
+    if ($currentEntries -notcontains $PathToAdd) {
+        $env:Path = "$PathToAdd;$env:Path"
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userEntries = if ([string]::IsNullOrWhiteSpace($userPath)) {
+        @()
+    } else {
+        $userPath -split ';'
+    }
+
+    if ($userEntries -notcontains $PathToAdd) {
         if ([string]::IsNullOrWhiteSpace($userPath)) {
-            $userPath = ""
-        }
-
-        if ($userPath -notlike "*$PathToAdd*") {
-            if ([string]::IsNullOrWhiteSpace($userPath)) {
-                [Environment]::SetEnvironmentVariable("Path", $PathToAdd, "User")
-            } else {
-                [Environment]::SetEnvironmentVariable("Path", "$PathToAdd;$userPath", "User")
-            }
+            [Environment]::SetEnvironmentVariable("Path", $PathToAdd, "User")
+        } else {
+            [Environment]::SetEnvironmentVariable("Path", "$PathToAdd;$userPath", "User")
         }
     }
 }
@@ -268,9 +275,17 @@ if (-not (Test-Path $MsysBash)) {
 
 $mingwPrefix = if ($MsysFlavor -eq "ucrt64") { "mingw-w64-ucrt-x86_64" } else { "mingw-w64-x86_64" }
 
-& $MsysBash -lc "pacman -Syuu --noconfirm || true"
-& $MsysBash -lc "pacman -Suu --noconfirm || true"
-& $MsysBash -lc "pacman -S --needed --noconfirm base-devel git make pkgconf ${mingwPrefix}-gcc ${mingwPrefix}-openssl ${mingwPrefix}-gmp"
+Invoke-CheckedNativeCommand `
+    -Command { & $MsysBash -lc "pacman -Syuu --noconfirm" } `
+    -ErrorMessage "pacman -Syuu failed. Close all MSYS2 terminals and rerun this script."
+
+Invoke-CheckedNativeCommand `
+    -Command { & $MsysBash -lc "pacman -Suu --noconfirm" } `
+    -ErrorMessage "pacman -Suu failed. Close all MSYS2 terminals and rerun this script."
+
+Invoke-CheckedNativeCommand `
+    -Command { & $MsysBash -lc "pacman -S --needed --noconfirm base-devel git make pkgconf ${mingwPrefix}-gcc ${mingwPrefix}-openssl ${mingwPrefix}-gmp" } `
+    -ErrorMessage "MSYS2 dependency install failed."
 
 if (-not (Test-Path (Join-Path $MsysBin "gcc.exe"))) {
     throw "gcc.exe not found in MSYS2 $MsysFlavor bin: $MsysBin"
@@ -315,10 +330,6 @@ git rev-parse HEAD
 # ============================================================
 
 Write-Host "[4/8] configure Go GOPATH mode..."
-
-go env -w GO111MODULE=off
-go env -w CGO_ENABLED=1
-go env -w GOPATH="$env:GOPATH"
 
 $env:GO111MODULE = "off"
 $env:CGO_ENABLED = "1"
@@ -382,6 +393,7 @@ $dlls = @(
     "libcrypto-3-x64.dll",
     "libssl-3-x64.dll",
     "libgmp-10.dll",
+    "libgmpxx-4.dll",
     "libstdc++-6.dll",
     "libgcc_s_seh-1.dll",
     "libwinpthread-1.dll",
@@ -400,6 +412,13 @@ foreach ($dll in $dlls) {
     }
 }
 
+if (Test-Path (Join-Path $MsysBin "objdump.exe")) {
+    Write-Host "Required DLLs:"
+    & (Join-Path $MsysBin "objdump.exe") -p $CypherExe | Select-String "DLL Name"
+} else {
+    Write-Host "WARNING: objdump.exe was not found in $MsysBin. Skipping DLL dependency listing."
+}
+
 $env:Path = "$CypherDir\build\bin;$MsysBin;C:\msys64\usr\bin;$goBin;$env:Path"
 
 & $CypherExe version
@@ -415,17 +434,22 @@ Set-Location $CypherDir
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 
 if ([string]::IsNullOrWhiteSpace($GenesisFile)) {
-    if (Test-Path ".\genesis.json") {
-        $GenesisFile = Join-Path $CypherDir "genesis.json"
-    } elseif (Test-Path ".\genesistest.json") {
-        $GenesisFile = Join-Path $CypherDir "genesistest.json"
-    } else {
-        throw "No genesis file was found. Pass -GenesisFile explicitly."
-    }
+    throw "Pass -GenesisFile explicitly. Example: -GenesisFile `"$CypherDir\cmd\cypher\genesisLocal.json`""
 }
 
 if (-not (Test-Path $GenesisFile)) {
     throw "Genesis file not found: $GenesisFile"
+}
+
+$genesisJson = Get-Content $GenesisFile -Raw | ConvertFrom-Json
+$chainId = $genesisJson.config.chainId
+
+if ($null -eq $chainId) {
+    throw "Genesis chainId was not found at config.chainId. GenesisFile=$GenesisFile"
+}
+
+if (($ExpectedChainId -ne 0) -and ([int64]$chainId -ne $ExpectedChainId)) {
+    throw "Unexpected genesis chainId. Expected $ExpectedChainId, actual $chainId. GenesisFile=$GenesisFile"
 }
 
 Write-Host "Cypher dir:"
@@ -434,8 +458,34 @@ Write-Host "Data dir:"
 Write-Host "  $DataDir"
 Write-Host "Genesis file:"
 Write-Host "  $GenesisFile"
+Write-Host "Genesis chainId:"
+Write-Host "  $chainId"
 Write-Host "Genesis SHA256:"
 Get-FileHash $GenesisFile -Algorithm SHA256 | Format-List
+
+if ($CleanData) {
+    Write-Host "CleanData was specified. Removing old chain database files but preserving keystore."
+
+    $cleanTargets = @(
+        (Join-Path $DataDir "chaindata"),
+        (Join-Path $DataDir "nodes"),
+        (Join-Path $DataDir "nodekey"),
+        (Join-Path $DataDir "transactions.rlp"),
+        (Join-Path $DataDir "triecache"),
+        (Join-Path $DataDir "cypher\chaindata"),
+        (Join-Path $DataDir "cypher\nodes"),
+        (Join-Path $DataDir "cypher\nodekey"),
+        (Join-Path $DataDir "cypher\transactions.rlp"),
+        (Join-Path $DataDir "cypher\triecache")
+    )
+
+    foreach ($target in $cleanTargets) {
+        if (Test-Path $target) {
+            Remove-Item $target -Recurse -Force
+            Write-Host "Removed: $target"
+        }
+    }
+}
 
 Invoke-CheckedNativeCommand `
     -Command { & $CypherExe --datadir $DataDir init $GenesisFile } `
@@ -448,4 +498,8 @@ Write-Host "Data directory:"
 Write-Host "  $DataDir"
 Write-Host ""
 Write-Host "Example local start command:"
-Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --syncmode full --gcmode archive --http --http.addr 127.0.0.1 --ws --ws.addr 127.0.0.1 console"
+Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --http --http.addr 127.0.0.1 --ws --ws.addr 127.0.0.1 console"
+Write-Host ""
+Write-Host "Example local start command with explicit P2P/RNet/RPC ports:"
+Write-Host "  .\build\bin\cypher.exe --datadir `"$DataDir`" --networkid $chainId --syncmode full --gcmode archive --rnetport 7200 --port 6000 --http --http.addr 127.0.0.1 --http.port 8000 --ws --ws.addr 127.0.0.1 --ws.port 9251 console"
+exit 0
