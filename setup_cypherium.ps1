@@ -513,7 +513,6 @@ Patch-WindowsBLSCgoLDFLAGS -CypherDir $CypherDir
 Write-Step "8/10 Build cypher.exe with direct external linker mode"
 
 Remove-Item (Join-Path $CypherDir "build\bin") -Recurse -Force -ErrorAction SilentlyContinue
-
 New-Item -ItemType Directory -Force -Path (Join-Path $CypherDir "build\bin") | Out-Null
 
 Invoke-NativeChecked `
@@ -525,7 +524,7 @@ Invoke-NativeChecked `
 Invoke-NativeChecked `
     -Command {
         & $goExe build `
-            -ldflags '-linkmode external -extldflags "-Wl,--disable-high-entropy-va"' `
+            -ldflags "-linkmode external -extldflags=-Wl,--disable-dynamicbase,--disable-high-entropy-va,--image-base,0x400000,-Bstatic,-lgmpxx,-lgmp,-lstdc++,-Bdynamic" `
             -o (Join-Path $CypherDir "build\bin\cypher.exe") `
             .\cmd\cypher
     } `
