@@ -75,25 +75,25 @@ function Install-WingetPackage {
         throw "winget was not found. Update App Installer from Microsoft Store or rerun with -SkipInstall after installing prerequisites manually."
     }
 
-    foreach ($id in $Ids) {
-        Write-Host "Installing $Name with winget package id: $id"
-        & winget install --id $id -e --accept-source-agreements --accept-package-agreements
+foreach ($id in $Ids) {
+    Write-Host "Installing $Name with winget package id: $id"
+    & winget install --id $id -e --source winget --accept-source-agreements --accept-package-agreements
 
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "WARNING: winget returned $LASTEXITCODE for $id. Trying the next candidate if available."
-            continue
-        }
-
-        foreach ($path in $Paths) {
-            if (Test-Path -LiteralPath $path) { return }
-        }
-
-        foreach ($command in $Commands) {
-            if (Get-Command $command -ErrorAction SilentlyContinue) { return }
-        }
-
-        return
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARNING: winget returned $LASTEXITCODE for $id. Trying the next candidate if available."
+        continue
     }
+
+    foreach ($path in $Paths) {
+        if (Test-Path -LiteralPath $path) { return }
+    }
+
+    foreach ($command in $Commands) {
+        if (Get-Command $command -ErrorAction SilentlyContinue) { return }
+    }
+
+    return
+}
 
     throw "Failed to install or detect $Name."
 }
