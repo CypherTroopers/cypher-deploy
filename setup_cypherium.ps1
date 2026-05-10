@@ -658,7 +658,7 @@ $Error.Clear()
 
 Invoke-NativeChecked `
     -Command {
-        & pm2 start $StartScript --name cypher-node --interpreter $PowerShellExe --interpreter-args "-NoProfile -ExecutionPolicy Bypass"
+        & pm2 start powershell.exe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File $StartScript
     } `
     -ErrorMessage "pm2 start failed."
 
