@@ -6,8 +6,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$RepoUrl = "https://github.com/cypherium/cypher.git",
-    [string]$RepoBranch = "",
+    [string]$RepoUrl = "https://github.com/CypherTroopers/cypher.git",
+    [string]$RepoBranch = "ecdsa_1.1_test_colossus-Xv2test",
     [string]$Gopath = "$env:USERPROFILE\go",
     [ValidateSet("mingw64", "ucrt64")]
     [string]$MsysFlavor = "mingw64",
