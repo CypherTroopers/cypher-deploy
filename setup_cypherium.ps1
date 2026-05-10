@@ -298,16 +298,17 @@ function Ensure-GitClone {
 }
 
 function Install-GopathDependencies {
-    $deps = @(
-        @{ Url = "https://github.com/VictoriaMetrics/fastcache.git"; Directory = (Join-Path $Gopath "src\github.com\VictoriaMetrics\fastcache") },
-        @{ Url = "https://github.com/shirou/gopsutil.git"; Directory = (Join-Path $Gopath "src\github.com\shirou\gopsutil") },
-        @{ Url = "https://github.com/dlclark/regexp2.git"; Directory = (Join-Path $Gopath "src\github.com\dlclark\regexp2") },
-        @{ Url = "https://github.com/go-sourcemap/sourcemap.git"; Directory = (Join-Path $Gopath "src\github.com\go-sourcemap\sourcemap") },
-        @{ Url = "https://github.com/tklauser/go-sysconf.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\go-sysconf") },
-        @{ Url = "https://github.com/tklauser/numcpus.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\numcpus") },
-        @{ Url = "https://github.com/yusufpapurcu/wmi.git"; Directory = (Join-Path $Gopath "src\github.com\yusufpapurcu\wmi") },
-        @{ Url = "https://go.googlesource.com/sys"; Directory = (Join-Path $Gopath "src\golang.org\x\sys") }
-    )
+$deps = @(
+    @{ Url = "https://github.com/VictoriaMetrics/fastcache.git"; Directory = (Join-Path $Gopath "src\github.com\VictoriaMetrics\fastcache") },
+    @{ Url = "https://github.com/shirou/gopsutil.git"; Directory = (Join-Path $Gopath "src\github.com\shirou\gopsutil") },
+    @{ Url = "https://github.com/yusufpapurcu/wmi.git"; Directory = (Join-Path $Gopath "src\github.com\yusufpapurcu\wmi") },
+    @{ Url = "https://github.com/go-ole/go-ole.git"; Directory = (Join-Path $Gopath "src\github.com\go-ole\go-ole") },
+    @{ Url = "https://github.com/dlclark/regexp2.git"; Directory = (Join-Path $Gopath "src\github.com\dlclark\regexp2") },
+    @{ Url = "https://github.com/go-sourcemap/sourcemap.git"; Directory = (Join-Path $Gopath "src\github.com\go-sourcemap\sourcemap") },
+    @{ Url = "https://github.com/tklauser/go-sysconf.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\go-sysconf") },
+    @{ Url = "https://github.com/tklauser/numcpus.git"; Directory = (Join-Path $Gopath "src\github.com\tklauser\numcpus") },
+    @{ Url = "https://go.googlesource.com/sys"; Directory = (Join-Path $Gopath "src\golang.org\x\sys") }
+)
 
     foreach ($dep in $deps) {
         Ensure-GitClone -Url $dep.Url -Directory $dep.Directory
