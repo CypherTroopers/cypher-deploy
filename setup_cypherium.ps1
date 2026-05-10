@@ -656,8 +656,17 @@ try {
 $global:LASTEXITCODE = 0
 $Error.Clear()
 
-Invoke-NativeChecked -Command { & pm2 start $PowerShellExe --name cypher-node -- -NoProfile -ExecutionPolicy Bypass -File $StartScript } -ErrorMessage "pm2 start failed."
-Invoke-NativeChecked -Command { & pm2 save } -ErrorMessage "pm2 save failed."
+Invoke-NativeChecked `
+    -Command {
+        & pm2 start $StartScript --name cypher-node --interpreter $PowerShellExe --interpreter-args "-NoProfile -ExecutionPolicy Bypass"
+    } `
+    -ErrorMessage "pm2 start failed."
+
+Invoke-NativeChecked `
+    -Command {
+        & pm2 save
+    } `
+    -ErrorMessage "pm2 save failed."
 
 Write-Host ""
 Write-Host "PM2 started cypher-node."
