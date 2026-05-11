@@ -1,6 +1,6 @@
 # cypher-deploy
 
-## Setup
+## Setup Linux/Windows
 
 ```bash
 git clone https://github.com/CypherTroopers/cypher-deploy.git
@@ -11,6 +11,17 @@ linux
 chmod +x setup_cypherium.sh
 ./setup_cypherium.sh
  ```
+Windows
+ ```
+foreach ($p in 6000,7200,8000,9251) {
+  New-NetFirewallRule -DisplayName "Cypher TCP $p" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p
+  New-NetFirewallRule -DisplayName "Cypher UDP $p" -Direction Inbound -Action Allow -Protocol UDP -LocalPort $p
+}
+```
+```
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+./setup_cypherium.ps1
+```
 ## Check logs
 
 ```bash
@@ -19,7 +30,7 @@ pm2 logs
 ```bash
 Ctrl+C
  ```
-## start mining (console)
+## start mining (console)Linux/Windows
 ```bash
 cd ~/go/src/github.com/cypherium/cypher
  ```
@@ -27,7 +38,11 @@ Linux
  ```
 ./build/bin/cypher attach ipc:./chaindbname/cypher.ipc
  ```
-console command
+Windows
+```
+.\build\bin\cypher.exe attach ipc:\\.\pipe\cypher.ipc
+```
+console command Linux/Windows
  ```
 personal.newAccount("your password")
  ```
