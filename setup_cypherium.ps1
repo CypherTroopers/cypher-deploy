@@ -109,8 +109,12 @@ function Get-GoBinPath {
         return Split-Path -Parent $preferred
     }
 
-    $cmd = Get-Command go.exe -ErrorAction Stop
-    return Split-Path -Parent $cmd.Source
+    $cmd = Get-Command go.exe -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return Split-Path -Parent $cmd.Source
+    }
+
+    throw "go.exe not found."
 }
 
 function Install-GoWindows {
@@ -406,8 +410,9 @@ Write-Step "1/10 Install or detect required Windows tools"
 
 Install-WingetPackage -Ids @("Git.Git") -Name "Git" -Commands @("git.exe") -Paths @("C:\Program Files\Git\cmd\git.exe")
 Install-GoWindows -Version $GoVersion
+Add-ProcessPath "C:\Program Files\Go\bin"
 Install-WingetPackage -Ids @("MSYS2.MSYS2") -Name "MSYS2" -Paths @($MsysBash)
-Install-WingetPackage -Ids @("OpenJS.NodeJS") -Name "Node.js" -Commands @("node.exe", "npm.cmd") -Paths @("C:\Program Files\nodejs\node.exe", "C:\Program Files\nodejs\npm.cmd")
+Install-WingetPackage -Ids @("OpenJS.NodeJS.LTS", "OpenJS.NodeJS") -Name "Node.js" -Commands @("node.exe", "npm.cmd") -Paths @("C:\Program Files\nodejs\node.exe", "C:\Program Files\nodejs\npm.cmd")
 
 Add-ProcessPath "C:\Program Files\Git\cmd"
 Add-ProcessPath "C:\Program Files\Git\bin"
