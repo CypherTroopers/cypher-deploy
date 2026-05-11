@@ -412,7 +412,21 @@ Install-WingetPackage -Ids @("Git.Git") -Name "Git" -Commands @("git.exe") -Path
 Install-GoWindows -Version $GoVersion
 Add-ProcessPath "C:\Program Files\Go\bin"
 Install-WingetPackage -Ids @("MSYS2.MSYS2") -Name "MSYS2" -Paths @($MsysBash)
-Install-WingetPackage -Ids @("OpenJS.NodeJS.LTS", "OpenJS.NodeJS") -Name "Node.js" -Commands @("node.exe", "npm.cmd") -Paths @("C:\Program Files\nodejs\node.exe", "C:\Program Files\nodejs\npm.cmd")
+Install-WingetPackage -Ids @("OpenJS.NodeJS.LTS") -Name "Node.js" -Commands @("node.exe", "npm.cmd") -Paths @("C:\Program Files\nodejs\node.exe", "C:\Program Files\nodejs\npm.cmd")
+
+Add-ProcessPath "C:\Program Files\nodejs"
+
+if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
+    if (Test-Path "C:\Program Files\nodejs\node.exe") {
+        $env:Path = "C:\Program Files\nodejs;$env:Path"
+    }
+}
+
+if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    if (Test-Path "C:\Program Files\nodejs\npm.cmd") {
+        $env:Path = "C:\Program Files\nodejs;$env:Path"
+    }
+}
 
 Add-ProcessPath "C:\Program Files\Git\cmd"
 Add-ProcessPath "C:\Program Files\Git\bin"
