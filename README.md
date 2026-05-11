@@ -13,6 +13,12 @@ chmod +x setup_cypherium.sh
  ```
 Windows
  ```
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters" /v DisabledComponents /t REG_DWORD /d 32 /f
+```
+```
+Restart-Computer
+```
+```
 foreach ($p in 6000,7200,8000,9251) {
   New-NetFirewallRule -DisplayName "Cypher TCP $p" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p
   New-NetFirewallRule -DisplayName "Cypher UDP $p" -Direction Inbound -Action Allow -Protocol UDP -LocalPort $p
