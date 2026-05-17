@@ -8,8 +8,8 @@ cd cypher-deploy
  ```
 linux
  ```
-chmod +x setup_cypherium.sh
-./setup_cypherium.sh
+chmod +x setup_cypherium2.sh
+./setup_cypherium2.sh
  ```
 Windows
  ```
@@ -26,7 +26,7 @@ foreach ($p in 6000,7200,8000,9251) {
 ```
 ```
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-./setup_cypherium.ps1
+./setup_cypherium2.ps1
 ```
 ## Check logs
 
