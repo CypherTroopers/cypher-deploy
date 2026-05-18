@@ -53,7 +53,7 @@ fi
 
 cd cypher
 git fetch --all
-git checkout colossusXv2_fastBFT
+git checkout colossusX_dev_test
 cp -f ./crypto/bls/lib/linux/* ./crypto/bls/lib/
 
 echo "[6/10] clone GOPATH dependencies..."
